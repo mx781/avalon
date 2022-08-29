@@ -7,7 +7,7 @@ sudo -iu user mkdir /home/user/.mujoco
 sudo -iu user wget -nv https://mujoco.org/download/mujoco210-linux-x86_64.tar.gz
 sudo -iu user tar -xzf mujoco210-linux-x86_64.tar.gz -C /home/user/.mujoco
 sudo -iu user rm mujoco210-linux-x86_64.tar.gz
-sudo -iu user wget -nv https://www.roboti.us/file/mjkey.txt -O /home/user/.mujoco/mjkey.txt
+sudo -iu user wget -nv http://www.roboti.us/file/mjkey.txt -O /home/user/.mujoco/mjkey.txt
 
 sudo -iu user pip install box2d-py==2.3.8
 sudo -iu user pip install Shapely==1.7.0
