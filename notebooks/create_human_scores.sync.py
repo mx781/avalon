@@ -19,6 +19,7 @@ enable_debug_logging()
 
 # %%
 
+APK_VERSION = "edc9f273183b9a116d666d25795ba8fafeea1dbf"
 AVALON_BUCKET_NAME = "avalon-benchmark"
 OBSERVATION_KEY = "avalon__all_observations__935781fe-267d-4dcd-9698-714cc891e985.tar.gz"
 
@@ -26,6 +27,7 @@ s3_client = SimpleS3Client(bucket_name=AVALON_BUCKET_NAME)
 
 output_path = Path(f"{TEMP_DIR}/avalon")
 output_path.mkdir(parents=True, exist_ok=True)
+shutil.rmtree(output_path)
 
 observation_path = output_path / "observation"
 observation_path.mkdir(parents=True, exist_ok=True)
@@ -34,6 +36,7 @@ s3_client.download_to_file(key=OBSERVATION_KEY, output_path=output_path / OBSERV
 shutil.unpack_archive(output_path / OBSERVATION_KEY, observation_path, "gztar")
 
 assert observation_path.exists()
+
 
 # %%
 
@@ -97,7 +100,7 @@ def get_human_score_from_observation(
     is_reset = (user_path / "reset.marker").exists()
 
     human_observations = get_observations_from_human_recording(
-        observations_path=str(observations_path),
+        observations_path=observations_path,
         available_features=DEFAULT_AVAILABLE_FEATURES,
     )
 
@@ -113,7 +116,7 @@ def get_human_score_from_observation(
     left_hand_potential_energy_coefficient = 0.0
     right_hand_kinetic_energy_coefficient = 0.0
     right_hand_potential_energy_coefficient = 0.0
-
+    num_frames = len(human_observations)
     # skip the first frame because there are extremely high energy costs
     for obs in human_observations[1:]:
         total_energy_expenditure = (
@@ -133,16 +136,33 @@ def get_human_score_from_observation(
             hit_points -= total_energy_expenditure
 
         if obs.is_dead:
-            return dict(world_id=world_id, user_id=user_id, score=0.0, is_error=False, is_reset=is_reset)
+            return dict(
+                world_id=world_id, user_id=user_id, score=0.0, is_error=False, is_reset=is_reset, num_frames=num_frames
+            )
         if obs.is_food_present_in_world < 0.1:
-            return dict(world_id=world_id, user_id=user_id, score=hit_points, is_error=False, is_reset=is_reset)
+            return dict(
+                world_id=world_id,
+                user_id=user_id,
+                score=hit_points,
+                is_error=False,
+                is_reset=is_reset,
+                num_frames=num_frames,
+            )
 
-    return dict(world_id=world_id, user_id=user_id, score=max(0.0, hit_points), is_error=False, is_reset=is_reset)
+    return dict(
+        world_id=world_id,
+        user_id=user_id,
+        score=max(0.0, hit_points),
+        is_error=False,
+        is_reset=is_reset,
+        num_frames=num_frames,
+    )
 
 
 # %%
 
 score_by_world_id = defaultdict(dict)
+num_frames_by_world_id = defaultdict(dict)
 resets_by_user_id = defaultdict(list)
 all_errors = []
 
@@ -151,8 +171,8 @@ def on_done(result):
     if not result.get("is_error"):
         world_id = result["world_id"]
         user_id = result["user_id"]
-        score = result["score"]
-        score_by_world_id[world_id][user_id] = score
+        score_by_world_id[world_id][user_id] = result["score"]
+        num_frames_by_world_id[world_id][user_id] = result["num_frames"]
         if result.get("is_reset"):
             resets_by_user_id[user_id].append(world_id)
 
@@ -166,6 +186,26 @@ def on_error(error: BaseException):
 num_processes = 20
 
 results = []
+
+# %%
+
+for world_path in list(observation_path.iterdir()):
+    world_id = world_path.name
+    if (world_path / "ignored.marker").exists() or world_id.startswith("practice"):
+        continue
+    for user_path in world_path.iterdir():
+        user_id = user_path.name
+        if (user_path / "crash").exists():
+            continue
+
+        task_name, seed, difficulty = world_id.split("__")
+        cleaned_world_id = f"{task_name}__{int(seed)}__{difficulty}"
+
+        result = get_human_score_from_observation(world_id=cleaned_world_id, user_id=user_id, user_path=user_path)
+        print(result)
+        results.append(result)
+
+# %%
 
 with Pool(processes=num_processes) as worker_pool:
     requests = []
@@ -198,5 +238,9 @@ with Pool(processes=num_processes) as worker_pool:
             results.append(request.get())
     worker_pool.close()
     worker_pool.join()
+
+# %%
+
+json.dump(score_by_world_id, open("human_scores.json", "w"))
 
 # %%

@@ -8,10 +8,10 @@ import numpy as np
 from rliable import library as rly
 from rliable import metrics
 
-from agent.evaluation import get_latest_checkpoint_filename
 from agent.evaluation import get_wandb_result_key
 from agent.random.evaluation import get_random_result_key
 from common.log_utils import logger
+from common.wandb_utils import get_latest_checkpoint_filename
 from contrib.s3_utils import SimpleS3Client
 from datagen.world_creation.constants import TASKS_BY_TASK_GROUP
 from datagen.world_creation.constants import AvalonTaskGroup

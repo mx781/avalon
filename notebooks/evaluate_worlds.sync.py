@@ -4,10 +4,10 @@ from pathlib import Path
 
 from common.log_utils import enable_debug_logging
 from datagen.env_helper import display_video
+from datagen.env_helper import visualize_worlds_in_folder
 from datagen.generate_worlds import generate_worlds
 from datagen.world_creation.constants import AvalonTask
-from datagen.world_creation.heightmap import DebugVisualizationConfig
-from datagen.world_creation.visual_utils import visualize_worlds_in_folder
+from datagen.world_creation.types import DebugVisualizationConfig
 
 enable_debug_logging()
 
@@ -58,6 +58,7 @@ actual_worlds = generate_worlds(
     is_recreating=True,
     debug_visualization_config=DebugVisualizationConfig(is_2d_graph_drawn=IS_GRAPH_MODE),
     is_async=not IS_GRAPH_MODE,
+    is_generating_for_human=True,
 )
 
 # %%
@@ -65,7 +66,8 @@ actual_worlds = generate_worlds(
 NUM_ACTIONS = 20
 RESOLUTION = 512
 
-all_observations = visualize_worlds_in_folder(base_output_path, RESOLUTION, NUM_ACTIONS)
+world_paths = [base_output_path / x["world_id"] for x in actual_worlds]
+all_observations = visualize_worlds_in_folder(world_paths, RESOLUTION, NUM_ACTIONS)
 
 for obs in all_observations:
     display_video(obs, size=(RESOLUTION, RESOLUTION))
