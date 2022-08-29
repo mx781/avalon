@@ -10,4 +10,4 @@ sudo mkdir -p -m 777 "${DATA}"
 export PATH=/opt/venv/bin:$PATH
 export PYTHONPATH=$CODE
 
-exec python $CODE/agent/train_ppo_godot.py
+exec python -m agent.train_ppo_godot --is_training True --is_testing True
