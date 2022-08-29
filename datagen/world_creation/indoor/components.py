@@ -15,6 +15,7 @@ from matplotlib import pyplot as plt
 from networkx import Graph
 from scipy.spatial.transform import Rotation
 
+from contrib.serialization import Serializable
 from common.errors import SwitchError
 from datagen.godot_base_types import IntRange
 from datagen.world_creation.geometry import BuildingTile
@@ -33,7 +34,6 @@ from datagen.world_creation.types import BuildingBoolNP
 from datagen.world_creation.types import BuildingFloatNP
 from datagen.world_creation.types import BuildingIntNP
 from datagen.world_creation.types import Point3DNP
-from science.common.serialization import Serializable
 
 
 @attr.s(auto_attribs=True, hash=True, collect_by_mro=True)

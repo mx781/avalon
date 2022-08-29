@@ -5,6 +5,9 @@ from typing import Optional
 
 import attr
 
+from contrib.testing_utils import fixture
+from contrib.testing_utils import temp_path_
+from contrib.testing_utils import use
 from datagen.env_helper import create_vr_benchmark_config
 from datagen.godot_env import AvalonObservationType
 from datagen.godot_env import GoalEvaluator
@@ -13,9 +16,6 @@ from datagen.godot_env import GodotEnv
 from datagen.godot_env import VRActionType
 from datagen.godot_generated_types import AvalonSimSpec
 from datagen.world_creation.world_generator import GenerateWorldParams
-from science.common.testing_utils import fixture
-from science.common.testing_utils import temp_path_
-from science.common.testing_utils import use
 
 AvalonEnv = GodotEnv[AvalonObservationType, VRActionType]
 

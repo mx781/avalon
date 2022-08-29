@@ -25,6 +25,7 @@ from common.log_utils import logger
 from contrib.s3_utils import SimpleS3Client
 from contrib.testing_utils import temp_dir
 from contrib.utils import TEMP_DIR
+from contrib.utils import is_git_repo_clean_on_notebook
 from datagen.world_creation.indoor.tests.fixtures import get_current_reference_manifest
 from datagen.world_creation.indoor.tests.helpers import export_building
 from datagen.world_creation.indoor.tests.helpers import get_reference_data_path
@@ -34,7 +35,6 @@ from datagen.world_creation.indoor.tests.params import BUILDING_CATALOG
 from datagen.world_creation.indoor.tests.params import CANONICAL_SEED
 from datagen.world_creation.indoor.tests.params import INDOOR_WORLD_CATALOG
 from datagen.world_creation.worlds.world import build_building
-from science.common.utils import is_git_repo_clean_on_notebook
 
 
 def generate_reference_buildings(export_path_base: Path):

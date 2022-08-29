@@ -10,6 +10,9 @@ from typing import Union
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from contrib.testing_utils import fixture
+from contrib.testing_utils import integration_test
+from contrib.testing_utils import use
 from datagen.avalon_godot_tests.conftest import behavior_test_folder_
 from datagen.avalon_godot_tests.conftest import godot_env_
 from datagen.avalon_godot_tests.scenario import AvalonEnv
@@ -46,9 +49,6 @@ from datagen.world_creation.entities.pillar import Pillar
 from datagen.world_creation.entities.tools.weapons import LargeRock
 from datagen.world_creation.entities.tools.weapons import LargeStick
 from datagen.world_creation.entities.tools.weapons import Stick
-from science.common.testing_utils import fixture
-from science.common.testing_utils import integration_test
-from science.common.testing_utils import use
 
 _ScenarioActions = Union[DebugCameraAction, VRActionType]
 

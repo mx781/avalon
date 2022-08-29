@@ -9,6 +9,9 @@ import attr
 import numpy as np
 
 from common.utils import flatten
+from contrib.testing_utils import fixture
+from contrib.testing_utils import integration_test
+from contrib.testing_utils import use
 from datagen.avalon_godot_tests.conftest import behavior_test_folder_
 from datagen.avalon_godot_tests.conftest import godot_env_
 from datagen.avalon_godot_tests.scenario import AvalonEnv
@@ -33,9 +36,6 @@ from datagen.world_creation.entities.food_tree import FoodTree
 from datagen.world_creation.entities.item import Item
 from datagen.world_creation.entities.tools.weapons import LargeRock
 from datagen.world_creation.entities.tools.weapons import LargeStick
-from science.common.testing_utils import fixture
-from science.common.testing_utils import integration_test
-from science.common.testing_utils import use
 
 # TODO(mjr) pylance can't tell they're all foods :eyeroll:
 FOODS: Tuple[Food, ...] = _FOODS

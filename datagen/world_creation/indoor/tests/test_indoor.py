@@ -8,6 +8,12 @@ import pytest
 from deepdiff import DeepDiff
 
 from common.utils import only
+from contrib.testing_utils import create_temp_file_path
+from contrib.testing_utils import integration_test
+from contrib.testing_utils import slow_integration_test
+from contrib.testing_utils import temp_file_path_
+from contrib.testing_utils import temp_path_
+from contrib.testing_utils import use
 from datagen.errors import ImpossibleWorldError
 from datagen.world_creation.geometry import BuildingTile
 from datagen.world_creation.indoor.building import Building
@@ -37,12 +43,6 @@ from datagen.world_creation.indoor.tests.params import INDOOR_WORLD_CATALOG
 from datagen.world_creation.indoor.tests.params import VALID_BUILDING_CATALOG
 from datagen.world_creation.indoor.tests.params import IndoorWorldParams
 from datagen.world_creation.worlds.world import build_building
-from science.common.testing_utils import create_temp_file_path
-from science.common.testing_utils import integration_test
-from science.common.testing_utils import slow_integration_test
-from science.common.testing_utils import temp_file_path_
-from science.common.testing_utils import temp_path_
-from science.common.testing_utils import use
 
 
 @slow_integration_test

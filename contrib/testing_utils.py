@@ -82,6 +82,12 @@ def temp_file_path_() -> Generator[Path, None, None]:
         yield output
 
 
+@fixture
+def temp_path_() -> Generator[Path, None, None]:
+    with temp_dir(TEMP_DIR) as output:
+        yield output
+
+
 def create_temp_file_path(cleanup=True) -> ContextManager[Path]:
     @contextmanager
     def context() -> Generator[Path, None, None]:

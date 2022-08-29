@@ -7,6 +7,9 @@ from typing import TypedDict
 import numpy as np
 from loguru import logger
 
+from contrib.testing_utils import RequestFixture
+from contrib.testing_utils import fixture
+from contrib.testing_utils import use
 from datagen.world_creation.configs.building import BuildingConfig
 from datagen.world_creation.indoor.building import Building
 from datagen.world_creation.indoor.tests.params import CANONICAL_SEED
@@ -15,9 +18,6 @@ from datagen.world_creation.indoor.tests.params import INVALID_BUILDING_CATALOG
 from datagen.world_creation.indoor.tests.params import VALID_BUILDING_CATALOG
 from datagen.world_creation.indoor.tests.params import IndoorWorldParams
 from datagen.world_creation.worlds.world import build_building
-from science.common.testing_utils import RequestFixture
-from science.common.testing_utils import fixture
-from science.common.testing_utils import use
 
 EMPTY_FILE_CHECKSUM = "d41d8cd98f00b204e9800998ecf8427e"
 

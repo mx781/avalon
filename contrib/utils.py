@@ -2,14 +2,17 @@ import json
 import os
 import platform
 import random
+import re
 import subprocess
 import time
 import urllib
 from pathlib import Path
+from typing import Any
 from typing import Optional
 
 import ipykernel
 import numpy as np
+import sh
 import torch
 from notebook import notebookapp
 
@@ -22,6 +25,41 @@ def _get_filesystem_root() -> str:
         else:
             return "/mnt/private"
     return env_value
+
+
+def compact(x: Any) -> Any:
+    return list(filter(None, x))
+
+
+_SPACES_RE = re.compile(" +")
+_git_command = sh.git.bake(_cwd=".", _tty_out=False)
+
+
+class NotARepositoryError(Exception):
+    pass
+
+
+def get_current_git_version() -> str:
+    try:
+        return str(re.split(_SPACES_RE, _git_command.log("-n1").splitlines()[0], 2)[1])
+    except sh.ErrorReturnCode as e:
+        if e.exit_code == 128 and "fatal: not a git repository" in e.stderr.decode("UTF-8"):
+            raise NotARepositoryError() from e
+        else:
+            raise
+
+
+def is_git_repo_clean_on_notebook() -> bool:
+    try:
+        output = _git_command("status", "-s").splitlines()
+    except sh.ErrorReturnCode as e:
+        if e.exit_code == 128 and "fatal: not a git repository" in e.stderr.decode("UTF-8"):
+            return True
+        if e.exit_code == 1:
+            return False
+    else:
+        non_notebook_lines = [x for x in output if not x.endswith(".ipynb")]
+        return len(non_notebook_lines) == 0
 
 
 FILESYSTEM_ROOT = _get_filesystem_root()
@@ -143,3 +181,7 @@ def run_local_command(
 
     str_lines = "".join(all_lines)
     return subprocess.CompletedProcess(command, exit_code, str_lines.encode("UTF-8"), b"")
+
+
+def is_on_osx():
+    return platform.system().lower() == "darwin"
