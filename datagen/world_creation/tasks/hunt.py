@@ -9,40 +9,70 @@ import attr
 import numpy as np
 from scipy import stats
 
+from datagen.errors import ImpossibleWorldError
+from datagen.world_creation.configs.export import ExportConfig
+from datagen.world_creation.configs.task import TaskConfig
 from datagen.world_creation.constants import DEFAULT_SAFETY_RADIUS
+from datagen.world_creation.constants import ITEM_FLATTEN_RADIUS
 from datagen.world_creation.constants import WEAPON_HEIGHT_OFFSET
-from datagen.world_creation.heightmap import ExportConfig
-from datagen.world_creation.items import ALL_PREY_CLASSES
-from datagen.world_creation.items import Animal
-from datagen.world_creation.items import Entity
-from datagen.world_creation.items import LargeRock
-from datagen.world_creation.items import LargeStick
-from datagen.world_creation.items import Placeholder
-from datagen.world_creation.items import Prey
-from datagen.world_creation.items import Rock
-from datagen.world_creation.items import Stick
-from datagen.world_creation.items import Weapon
-from datagen.world_creation.new_world import NewWorld
-from datagen.world_creation.tasks.compositional_types import CompositionalConstraint
-from datagen.world_creation.tasks.task_worlds import create_world_from_constraint
-from datagen.world_creation.tasks.utils import TaskGenerationFunctionResult
-from datagen.world_creation.tasks.utils import create_inner_placeholder_solution
-from datagen.world_creation.tasks.utils import difficulty_variation
-from datagen.world_creation.tasks.utils import export_skill_world
-from datagen.world_creation.tasks.utils import get_rock_probability
-from datagen.world_creation.tasks.utils import make_ring
-from datagen.world_creation.tasks.utils import normal_distrib_range
-from datagen.world_creation.tasks.utils import scale_with_difficulty
-from datagen.world_creation.tasks.utils import select_boolean_difficulty
-from datagen.world_creation.tasks.utils import select_categorical_difficulty
-from datagen.world_creation.tasks.utils import starting_hit_points_from_difficulty
-from datagen.world_creation.utils import ImpossibleWorldError
-from datagen.world_creation.world_location_data import WorldLocationData
-from datagen.world_creation.world_location_data import to_2d_point
+from datagen.world_creation.entities.animals import ALL_PREY_CLASSES
+from datagen.world_creation.entities.animals import Animal
+from datagen.world_creation.entities.animals import Prey
+from datagen.world_creation.entities.entity import Entity
+from datagen.world_creation.entities.tools.placeholder import Placeholder
+from datagen.world_creation.entities.tools.weapons import LargeRock
+from datagen.world_creation.entities.tools.weapons import LargeStick
+from datagen.world_creation.entities.tools.weapons import Rock
+from datagen.world_creation.entities.tools.weapons import Stick
+from datagen.world_creation.entities.tools.weapons import Weapon
+from datagen.world_creation.utils import to_2d_point
+from datagen.world_creation.worlds.creation import create_world_from_constraint
+from datagen.world_creation.worlds.difficulty import difficulty_variation
+from datagen.world_creation.worlds.difficulty import normal_distrib_range
+from datagen.world_creation.worlds.difficulty import scale_with_difficulty
+from datagen.world_creation.worlds.difficulty import select_boolean_difficulty
+from datagen.world_creation.worlds.difficulty import select_categorical_difficulty
+from datagen.world_creation.worlds.export import export_world
+from datagen.world_creation.worlds.obstacles.configure import create_inner_placeholder_solution
+from datagen.world_creation.worlds.obstacles.configure import make_ring
+from datagen.world_creation.worlds.types import CompositionalConstraint
+from datagen.world_creation.worlds.world import World
+from datagen.world_creation.worlds.world_locations import WorldLocations
 
 TotalWeaponValue = Literal[4, 3, 2, 1]
 
-MIN_PIT_SIZE = 2.0
+
+@attr.s(auto_attribs=True, collect_by_mro=True, hash=True)
+class HuntTaskConfig(TaskConfig):
+    # how large of a world to create. Different bounds depending on if inside a pit or outside of the pit.
+    # Note that it is much easier when the prey is in a pit because they cannot escape and ricochets can hit the prey
+    inside_pit_dist_easy: float = 5.0
+    inside_pit_dist_hard: float = 20.0
+    outside_pit_dist_easy: float = 10.0
+    outside_pit_dist_hard: float = 40.0
+    # how big the pit should be. It will grow on harder difficulties up to the max possible in the world given the
+    # pit distance defined above
+    pit_size_min: float = 2.0
+    # how steep to make the pit. The length is uniform random between these two values.
+    pit_incline_length_min: float = 0.5
+    pit_incline_length_max: float = 1.75
+    # how high the pit should be. Is a bit weirdly parameterized because really the easiest thing is if the prey is just
+    # baarely unable to escape, but not in such a deep pit that it makes it hard to throw stuff at it
+    shallow_pit_depth_easy: float = 1.0
+    shallow_pit_depth_hard: float = 2.0
+    deep_pit_depth_easy: float = 3.0
+    deep_pit_depth_hard: float = 2.0
+    pit_depth_std_dev: float = 0.25
+    # these parameters control which weapons will be spawned
+    # the probability that any given weapons will be a rock (vs a stick)
+    rock_probability: float = 0.5
+    # some weapons are more useful than others. They are spawned until enough "value" has been spawned
+    weapon_value_easy: float = 5.0
+    weapon_value_hard: float = 2.0
+    weapon_value_std_dev: float = 0.5
+    # there are large variants of weapons, which do more damage. They become less likely to spawn at higher difficulties
+    large_weapon_probability_easy: float = 0.8
+    large_weapon_probability_hard: float = 0.2
 
 
 @attr.define
@@ -69,13 +99,14 @@ def generate_hunt_task(
     output_path: Path,
     export_config: ExportConfig,
     _FORCED: Optional[ForceHunt] = None,
-) -> TaskGenerationFunctionResult:
-    world, locations, difficulty = create_hunt_obstacle(rand, difficulty, export_config, _forced_hunt=_FORCED)
-    world.end_height_obstacles(locations, is_accessible_from_water=True)
-    world.add_spawn(rand, difficulty, locations.spawn, locations.goal)
-    export_skill_world(output_path, rand, world)
-
-    return TaskGenerationFunctionResult(starting_hit_points_from_difficulty(difficulty))
+    task_config: HuntTaskConfig = HuntTaskConfig(),
+):
+    world, locations, difficulty = create_hunt_obstacle(
+        rand, difficulty, export_config, _forced_hunt=_FORCED, task_config=task_config
+    )
+    world, locations = world.end_height_obstacles(locations, is_accessible_from_water=True)
+    world = world.add_spawn(rand, difficulty, locations.spawn, locations.goal)
+    export_world(output_path, rand, world)
 
 
 def create_hunt_obstacle(
@@ -84,7 +115,8 @@ def create_hunt_obstacle(
     export_config: ExportConfig,
     constraint: Optional[CompositionalConstraint] = None,
     _forced_hunt: Optional[ForceHunt] = None,
-) -> Tuple[NewWorld, WorldLocationData, float]:
+    task_config: HuntTaskConfig = HuntTaskConfig(),
+) -> Tuple[World, WorldLocations, float]:
     if _forced_hunt is None:
         _forced_hunt = ForceHunt()
 
@@ -97,29 +129,43 @@ def create_hunt_obstacle(
         # this isn't exactly distance... because we reset the spawn position to be at the ledge below
         #  so we will actually end up closer
         desired_goal_distance = scale_with_difficulty(
-            difficulty, 5.0, 20.0, _FORCED=_forced_hunt.desired_goal_distance
+            difficulty,
+            task_config.inside_pit_dist_easy,
+            task_config.inside_pit_dist_hard,
+            _FORCED=_forced_hunt.desired_goal_distance,
         )
     else:
         # this WILL be how far away the prey is
         desired_goal_distance = scale_with_difficulty(
-            difficulty, 10.0, 40.0, _FORCED=_forced_hunt.desired_goal_distance
+            difficulty,
+            task_config.outside_pit_dist_easy,
+            task_config.outside_pit_dist_hard,
+            _FORCED=_forced_hunt.desired_goal_distance,
         )
 
-    prey_offset = prey_type(entity_id=0, position=np.array([0.0, 0.0, 0.0])).get_offset()
+    prey_offset = prey_type(position=np.array([0.0, 0.0, 0.0])).get_offset()
     world, locations = create_world_from_constraint(
         stats.norm(desired_goal_distance, 0.5), rand, difficulty, export_config, constraint, prey_offset
     )
 
-    pit_incline_distance = 0.5 + 1.25 * rand.uniform()
-    max_possible_outer_radius = world.get_critical_distance(locations, pit_incline_distance + MIN_PIT_SIZE)
+    pit_incline_delta = task_config.pit_incline_length_max - task_config.pit_incline_length_min
+    pit_incline_distance = task_config.pit_incline_length_min + pit_incline_delta * rand.uniform()
+    max_possible_outer_radius, _warnings = world.get_critical_distance(
+        locations, pit_incline_distance + task_config.pit_size_min
+    )
 
-    prey = prey_type(entity_id=0, position=locations.goal)
+    prey = prey_type(position=locations.goal)
 
     weapons, output_difficulty = select_weapons(
         rand,
         difficulty,
         is_rock_necessary=is_flying_prey_present([prey]),
-        rock_probability=_forced_hunt.rock_probability or get_rock_probability(difficulty),
+        rock_probability=_forced_hunt.rock_probability or task_config.rock_probability,
+        weapon_value_easy=task_config.weapon_value_easy,
+        weapon_value_hard=task_config.weapon_value_hard,
+        weapon_value_std_dev=task_config.weapon_value_std_dev,
+        large_weapon_probability_easy=task_config.large_weapon_probability_easy,
+        large_weapon_probability_hard=task_config.large_weapon_probability_hard,
         _FORCED_WEAPON_VALUE=_forced_hunt.weapon_value,
         _FORCED_LARGE_WEAPON_RATE=_forced_hunt.large_weapon_probability,
     )
@@ -128,7 +174,7 @@ def create_hunt_obstacle(
 
     # if there is no pit, or the world is too small for a pit, fine, just stick some weapons and predator there
     if max_possible_outer_radius is None or not is_prey_in_pit:
-        world.add_item(prey, reset_height_offset=prey.get_offset())
+        world = world.add_item(prey, reset_height_offset=prey.get_offset())
         midway = locations.spawn + (locations.goal - locations.spawn) / rand.uniform(1.5, 2.5)
         mid_point = to_2d_point(midway)
         for _ in range(len(weapons)):
@@ -136,28 +182,33 @@ def create_hunt_obstacle(
             if point is None:
                 raise ImpossibleWorldError("No place for any weapons")
             position = np.array([point[0], 0.0, point[1]])
-            world.add_item(Placeholder(entity_id=0, position=position), reset_height_offset=WEAPON_HEIGHT_OFFSET)
-        world.replace_weapon_placeholders(weapons)
+            world = world.add_item(Placeholder(position=position), reset_height_offset=WEAPON_HEIGHT_OFFSET)
+        world = world.replace_weapon_placeholders(weapons, locations.island, ITEM_FLATTEN_RADIUS)
 
         new_locations = locations
     else:
         # can be increased up to max_possible_outer_radius
         # makes the task harder because then the pit is bigger
-        extra_pit_size = scale_with_difficulty(difficulty, MIN_PIT_SIZE, max_possible_outer_radius)
+        extra_pit_size = scale_with_difficulty(difficulty, task_config.pit_size_min, max_possible_outer_radius)
         outer_radius = max_possible_outer_radius - extra_pit_size
 
         # Smaller walls are potentially harder because the prey can escape, but whatever
         is_pit_shallow, difficulty = select_boolean_difficulty(difficulty, rand, _FORCED=_forced_hunt.is_pit_shallow)
-        pit_range = 3.0, 2.0
         if is_pit_shallow:
-            pit_range = 1.0, 2.0
-        pit_depth = -normal_distrib_range(*pit_range, 0.25, rand, difficulty, _FORCED=_forced_hunt.pit_depth)
+            pit_range = task_config.shallow_pit_depth_easy, task_config.shallow_pit_depth_hard
+        else:
+            pit_range = task_config.deep_pit_depth_easy, task_config.deep_pit_depth_hard
+        pit_depth = -normal_distrib_range(
+            pit_range[0], pit_range[1], task_config.pit_depth_std_dev, rand, difficulty, _FORCED=_forced_hunt.pit_depth
+        )
 
-        # TODO right?
-        weapon_placeholders = create_inner_placeholder_solution(
-            count=len(weapons),
-            offset=WEAPON_HEIGHT_OFFSET,
-            randomization_dist=weapon_radius,
+        weapon_placeholders = attr.evolve(
+            create_inner_placeholder_solution(
+                count=len(weapons),
+                offset=WEAPON_HEIGHT_OFFSET,
+                randomization_dist=weapon_radius,
+            ),
+            inside_item_radius=ITEM_FLATTEN_RADIUS,
         )
 
         ring_config = make_ring(
@@ -181,10 +232,10 @@ def create_hunt_obstacle(
             # flying prey can always escape though
             is_inside_climbable=True,
         )
-        world.add_height_obstacle(rand, ring_config, locations.island)
-        world.replace_weapon_placeholders(weapons)
+        world = world.add_height_obstacle(rand, ring_config, locations.island)
+        world = world.replace_weapon_placeholders(weapons, locations.island, ITEM_FLATTEN_RADIUS)
 
-        world.add_item(prey, reset_height_offset=prey.get_offset())
+        world = world.add_item(prey, reset_height_offset=prey.get_offset())
 
         # reset the spawn location to the bottom edge of the pit so we are right next to the prey
         weapon_positions = [x.position for x in world.items if is_weapon(x)]
@@ -210,21 +261,27 @@ def select_weapons(
     rand: np.random.Generator,
     difficulty: float,
     is_rock_necessary: bool,
-    rock_probability: float = 0.5,
+    rock_probability: float,
+    weapon_value_easy: float,
+    weapon_value_hard: float,
+    weapon_value_std_dev: float,
+    large_weapon_probability_easy: float,
+    large_weapon_probability_hard: float,
     _FORCED_WEAPON_VALUE: Optional[TotalWeaponValue] = None,
     _FORCED_LARGE_WEAPON_RATE: Optional[float] = None,
 ) -> Tuple[List[Type[Weapon]], float]:
 
     # Rocks/projectiles are harder to use and you lose them, so we give each weapon a "value" instead of having fixed counts
-    weapon_value, difficulty = select_categorical_difficulty(
-        [5, 4, 3, 2],
-        difficulty,
-        rand,
-        _FORCED=_FORCED_WEAPON_VALUE,
+    weapon_value = int(
+        normal_distrib_range(
+            weapon_value_easy + 0.49, weapon_value_hard - 0.49, weapon_value_std_dev, rand, difficulty
+        )
     )
 
     # Large weapons have the same value as their counterparts for now
-    large_weapon_rate = scale_with_difficulty(difficulty, 0.8, 0.2, _FORCED=_FORCED_LARGE_WEAPON_RATE)
+    large_weapon_rate = scale_with_difficulty(
+        difficulty, large_weapon_probability_easy, large_weapon_probability_hard, _FORCED=_FORCED_LARGE_WEAPON_RATE
+    )
 
     weapons: List[Weapon] = []
 
@@ -238,8 +295,6 @@ def select_weapons(
         else:
             weapon = Stick
         if rand.uniform() < large_weapon_rate:
-            # TODO: sorry, the large stick is just too big. Maybe it can be sharp instead :-P
-            # weapon = LargeRock if weapon is Rock else LargeStick
             weapon = LargeRock if weapon is Rock else Stick
         weapon_value -= weapon.WEAPON_VALUE
         weapons.append(weapon)

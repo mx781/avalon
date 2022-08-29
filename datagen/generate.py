@@ -195,10 +195,13 @@ def _derive_pipe_paths(config_path: str, log_path: str):
 
 
 class InteractiveGodotProcess:
-    def __init__(self, config: SimSpec, keep_log: bool = True, gpu_id: Optional[int] = None):
+    def __init__(
+        self, config: SimSpec, keep_log: bool = True, is_dev_flag_added: bool = False, gpu_id: Optional[int] = None
+    ):
         self.gpu_id = gpu_id
         self.config = config
         self.keep_log = keep_log
+        self.is_dev_flag_added = is_dev_flag_added
         self.process: Optional[subprocess.Popen[bytes]] = None
         log_uuid = str(uuid4())
         log_root = os.path.join(TEMP_DIR, log_uuid)
@@ -212,16 +215,12 @@ class InteractiveGodotProcess:
         )
 
         self.output_file_read_loc = 0
-        self.error_marker = "ERROR".encode("UTF-8")
+        self.error_marker = "ERROR"
         self.output_file_buffer = (" " * (len(self.error_marker) + 1)).encode("UTF-8")
 
     @property
     def config_path(self) -> str:
-        # TODO (hackathon) fix recording option flags here so this makes sense
-        if self.config.recording_options.is_recording_rgb:
-            return os.path.join(self.config.get_dir_root(), str(self.uuid), "config.json")
-        else:
-            return os.path.join(Path(self.log_path).parent, str(self.uuid), "config.json")
+        return os.path.join(self.config.get_dir_root(), str(self.uuid), "config.json")
 
     @property
     def _config_done_path(self) -> str:
@@ -279,11 +278,12 @@ class InteractiveGodotProcess:
         with open(self.config_path, "w") as config_file:
             config_file.write(_create_json_from_config(self.config))
 
-        godot_bash_args = self._get_godot_command(self.action_pipe_path, self.observation_pipe_path)
-        logger.info(f"{self.prefix} process group: {' '.join(godot_bash_args)}' &>> {self.log_path}")
+        extra_flags = ("--dev",) if self.is_dev_flag_added else tuple()
+        godot_bash_args = self._get_godot_command(self.action_pipe_path, self.observation_pipe_path, extra_flags)
+        # logger.info(f"{self.prefix} process group: {' '.join(godot_bash_args)}' &>> {self.log_path}")
 
-        debug_bash_cmd = " ".join(self._get_godot_command(self.action_record_path, "/tmp/debug_output"))
-        logger.info(f"{self.prefix} TO DEBUG RUN: {debug_bash_cmd}")
+        # debug_bash_cmd = " ".join(self._get_godot_command(self.action_record_path, "/tmp/debug_output"))
+        # logger.info(f"{self.prefix} TO DEBUG RUN: {debug_bash_cmd}")
 
         self.process = _popen_process_group(godot_bash_args, self.log_path)
 
@@ -294,12 +294,13 @@ class InteractiveGodotProcess:
         if unread_byte_count > 0:
             new_bytes = self.output_file.read(unread_byte_count)
             self.output_file_buffer = self.output_file_buffer + new_bytes
-            if self.error_marker in self.output_file_buffer and not any(
-                x.encode("UTF-8") in self.output_file_buffer for x in ERROR_ALLOWLIST
-            ):
-                self._raise_error()
-            else:
-                self.output_file_buffer = self.output_file_buffer[-len(self.error_marker) + 1 :]
+            line_buffer = self.output_file_buffer.decode("UTF-8", errors="ignore")
+            lines = line_buffer.split("\n")
+            # NOTE: we may have dropped something due to the "ignore" above but that should be fine
+            self.output_file_buffer = lines.pop().encode("UTF-8")
+            for line in lines:
+                if self.error_marker in line and not any(x in line for x in ERROR_ALLOWLIST):
+                    self._raise_error()
 
     def close(self, kill: bool = True, raise_logged_errors: bool = True):
         assert not self.is_closed, f"{self} already closed, cannot close again"

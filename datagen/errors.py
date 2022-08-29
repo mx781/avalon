@@ -1,3 +1,6 @@
+from datagen.world_creation.constants import AvalonTask
+
+
 class DatagenConfigError(Exception):
     """
     Raised when datagen configuration values are impossible or incoherent.
@@ -18,3 +21,12 @@ class DesynchronizedTransformError(Exception):
     Is here to help keep you from going insane if you were to accidentally apply different transforms to
     data that really needs to stay synced (eg, depth and rgb)
     """
+
+
+class ImpossibleWorldError(Exception):
+    pass
+
+
+class WorldTooSmall(ImpossibleWorldError):
+    def __init__(self, task: AvalonTask, min_dist: float, available_dist: float, *args: object) -> None:
+        super().__init__(f"Small {task} world: needed {min_dist} but only have {available_dist}", *args)

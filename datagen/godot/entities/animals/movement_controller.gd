@@ -2,7 +2,13 @@ extends KinematicBody
 
 class_name MovementController
 
+var PHYSICS_FPS: float = ProjectSettings.get_setting("physics/common/physics_fps")
+var GRAVITY_MAGNITUDE: float = ProjectSettings.get_setting("physics/3d/default_gravity")
+var VELOCITY_CHANGE_FROM_GRAVITY = Vector3.DOWN * GRAVITY_MAGNITUDE * 1 / PHYSICS_FPS
+
 const OCEAN_ELEVATION = 0
+const MAX_TERRAIN_ELEVATION = 200
+const FAR_BELOW_OCEAN_ELEVATION = -20
 
 const MAX_SLIDES := 4
 const FLOOR_MAX_ANGLE := deg2rad(45)
@@ -69,9 +75,9 @@ func clamp_velocity(applied: Vector3, observed: Vector3) -> Vector3:
 	return observed
 
 
-func move(linear_velocity: Vector3, delta: float, snap: Vector3 = Vector3.ZERO) -> Vector3:
+func move(linear_velocity: Vector3, _delta: float, snap: Vector3 = Vector3.ZERO) -> Vector3:
 	if current_domain != AIR:
-		gravity_velocity += get_velocity_change_due_to_gravity(delta)
+		gravity_velocity += VELOCITY_CHANGE_FROM_GRAVITY
 	else:
 		gravity_velocity = Vector3.ZERO
 
@@ -94,13 +100,12 @@ func hop(linear_velocity: Vector3, _delta: float) -> Vector3:
 		gravity_velocity = Vector3.UP * linear_velocity.y
 		return actual_velocity
 
-	# getting unstuck
-	return _move_and_slide(linear_velocity)
+	var getting_unstuck_from_slope_velocity = _move_and_slide(linear_velocity)
+	return getting_unstuck_from_slope_velocity
 
 
 func is_able_to_climb() -> bool:
 	if HARD.mode():
-		# TODO consider making is_able_to_climb == has_node($climbing_ray)
 		HARD.assert(get_parent().is_able_to_climb, "%s is not able to climb" % get_parent())
 	var climbing_ray = get_climbing_ray()
 	return (
@@ -120,11 +125,6 @@ func climb(linear_velocity: Vector2, delta: float) -> Vector3:
 		climbing_ray, global_transform.basis, linear_velocity
 	)
 	return _move_and_slide(climbing_velocity * delta)
-
-
-func get_velocity_change_due_to_gravity(delta: float) -> Vector3:
-	# TODO get gravity from project settings / config
-	return Vector3.DOWN * 10 * delta
 
 
 func get_floor_ray() -> RayCast:
@@ -167,10 +167,15 @@ func align_and_position_parent(xform: Transform, floor_alignment_interpolation_w
 
 
 func distance_from_desired_altitude() -> float:
-	HARD.assert(
-		current_domain == AIR,
-		"doesn't make sense to call is_at_desired_altitude unless animal.is_flying()"
-	)
+	# TODO return this assert?
+	#	HARD.assert(
+	#		current_domain == AIR,
+	#		"doesn't make sense to call is_at_desired_altitude unless animal.is_flying()"
+	#	)
+	if current_domain != AIR:
+		print("WARNING: invalid domain for distance_from_desired_altitude: %s" % [current_domain])
+		return 0.0
+
 	# TODO layer/mask such that only floor collides
 	var ray = get_floor_ray()
 	var distance_from_floor = global_transform.origin.distance_to(ray.get_collision_point())
@@ -198,18 +203,14 @@ func is_heading_towards_ocean() -> bool:
 	var cast_forward_by = 5 if current_domain == AIR else 3
 	var offset = heading_in_dir * (cast_forward_by + $collision_shape.shape.extents.z)
 	var cast_from = global_transform.origin + offset
-	# cast from
-	cast_from.y = 200
-	var cast_to = Vector3(cast_from.x, -20, cast_from.z)
+	cast_from.y = MAX_TERRAIN_ELEVATION
+	var cast_to = Vector3(cast_from.x, FAR_BELOW_OCEAN_ELEVATION, cast_from.z)
 
 	var space_state = get_world().direct_space_state
 	var collison = space_state.intersect_ray(cast_from, cast_to, [])
 
 	var is_looking_at_void = not "collider" in collison
-	if is_looking_at_void:
-		return true
-
-	return collison["position"].y <= OCEAN_ELEVATION
+	return is_looking_at_void or collison["position"].y <= OCEAN_ELEVATION
 
 
 func cast_rays(is_flying: bool):

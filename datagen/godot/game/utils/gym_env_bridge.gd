@@ -38,23 +38,24 @@ func read_message() -> Array:
 		CONST.RENDER_MESSAGE, CONST.QUERY_AVAILABLE_FEATURES_MESSAGE, CONST.CLOSE_MESSAGE:
 			return [message]
 		CONST.SEED_MESSAGE:
-			return [message, action_pipe.get_64(), action_pipe.get_64()]
+			return [message, action_pipe.get_64()]
 		CONST.SELECT_FEATURES_MESSAGE:
 			var feature_names = []
 			var count := action_pipe.get_32()
 			for _i in range(count):
 				feature_names.append(action_pipe.get_line())
 			return [message, feature_names]
-		CONST.ACTION_MESSAGE:
+		CONST.ACTION_MESSAGE, CONST.DEBUG_CAMERA_ACTION_MESSAGE:
 			var count := action_pipe.get_32()
 			var data := action_pipe.get_buffer(count)
 			return [message, data]
 		CONST.RESET_MESSAGE:
-			var world_id := action_pipe.get_line()
-			var starting_hit_points := action_pipe.get_float()
 			var count := action_pipe.get_32()
 			var data := action_pipe.get_buffer(count)
-			return [message, data, world_id, starting_hit_points]
+			var episode_seed := action_pipe.get_64()
+			var world_id := action_pipe.get_line()
+			var starting_hit_points := action_pipe.get_float()
+			return [message, data, episode_seed, world_id, starting_hit_points]
 		_:
 			return []
 
@@ -117,6 +118,11 @@ func write_value(value, data_type):
 			observation_pipe.store_float(value.x)
 			observation_pipe.store_float(value.y)
 			observation_pipe.store_float(value.z)
+		TYPE_QUAT:
+			observation_pipe.store_float(value.x)
+			observation_pipe.store_float(value.y)
+			observation_pipe.store_float(value.z)
+			observation_pipe.store_float(value.w)
 		TYPE_REAL:
 			observation_pipe.store_float(value)
 		TYPE_INT:
@@ -125,8 +131,7 @@ func write_value(value, data_type):
 			for inner_value in value:
 				write_value(inner_value, typeof(inner_value))
 		_:
-			print("write")
-			HARD.stop("Unknown data type: %s", data_type)
+			HARD.stop("`gym_env_bridge.write_value` Unknown data type: %s", data_type)
 
 
 func render_to_pipe(screen: Image):

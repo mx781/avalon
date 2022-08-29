@@ -4,6 +4,8 @@ set -u
 
 export GODOT_THREADS='0'
 export XDG_DATA_HOME='/tmp/xdg-godot'
+
+export DISPLAY="${DISPLAY:-}"
 export LANG='en_US.UTF-8'
 
 CHECK_ENV=''
@@ -30,12 +32,14 @@ cat << EOF
 usage: $0
        [--thread_count[=N]]
        [--unbuffer_log]
+       [--xorg_display[=N]]
        [--system_check]
         CONFIG
        [CONFIG]...
 where:
      -T|--thread_count: thread mode for Godot, defaults to 4
      -U|--unbuffer_log: use line buffering for stdout/stderr
+     -X|--xorg_display: use an existing display, don't start Xorg
      -Y|--system_check: run a system check only, don't start Godot
         CONFIG...: JSON input files to use
 EOF
@@ -55,6 +59,9 @@ do
         -U|--unbuffer_log)
             GODOT_CMD=('stdbuf' '-oL' '-eL' "${GODOT_CMD[@]}")
         ;;
+        -X|--xorg_display)
+            DISPLAY=":${V#:}"
+        ;;
         -Y|--system_check)
             CHECK_ENV='1'
         ;;
@@ -69,6 +76,9 @@ do
         ;;
         --output_pipe_path)
             GODOT_CMD+=("--output-pipe-path=$V")
+        ;;
+        --dev)
+            GODOT_CMD+=("--dev")
         ;;
         --cuda-gpu-id)
             export EGL_CUDA_ID="$V"

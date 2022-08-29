@@ -14,13 +14,13 @@ from datagen.data_config import AbstractRange
 
 
 @attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
-class NewRange(AbstractRange):
+class IntRange(AbstractRange):
     min_ge: int
     max_lt: int
 
     @staticmethod
     def n(n: int):
-        return NewRange(0, n)
+        return IntRange(0, n)
 
     @property
     def size(self) -> int:
@@ -33,12 +33,12 @@ class NewRange(AbstractRange):
     def contains(self, value: float) -> bool:
         return self.min_ge <= value < self.max_lt
 
-    def overlap(self, other: "NewRange") -> Optional["NewRange"]:
+    def overlap(self, other: "IntRange") -> Optional["IntRange"]:
         min_ge = max(self.min_ge, other.min_ge)
         max_lt = min(self.max_lt, other.max_lt)
         if min_ge >= max_lt:
             return None
-        return NewRange(min_ge, max_lt)
+        return IntRange(min_ge, max_lt)
 
 
 class DataConfigImplementation(AbstractDataConfig):
@@ -80,10 +80,10 @@ class DataConfigImplementation(AbstractDataConfig):
         return self.is_generating_paired_videos
 
     def get_video_range(self) -> AbstractRange:
-        return NewRange(self.video_min, self.video_max)
+        return IntRange(self.video_min, self.video_max)
 
     def get_frame_range(self) -> AbstractRange:
-        return NewRange(0, self.frame_max)
+        return IntRange(0, self.frame_max)
 
     def create_data_generation_request(
         self: "DataConfigImplementation", video_range: AbstractRange, random_key: str, dir_root: str
@@ -244,3 +244,16 @@ class UniformDistribution(BaseDistribution[FloatT]):
                 value = (rand.random() * (self.value_max[i] - self.value_min[i])) + self.value_min[i]
                 values.append(value)
             return (self.value_min.__class__)(*values)
+
+
+@attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
+class FloatRange(IntRange):
+    min_ge: float  # type: ignore
+    max_lt: float  # type: ignore
+
+    def overlap(self, other: "FloatRange") -> Optional["FloatRange"]:
+        min_ge = max(self.min_ge, other.min_ge)
+        max_lt = min(self.max_lt, other.max_lt)
+        if min_ge >= max_lt:
+            return None
+        return FloatRange(min_ge, max_lt)

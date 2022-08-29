@@ -8,11 +8,8 @@ export var active_flee_full_speed := 3.0
 export var active_flee_turn_speed := 1.25
 export var active_flee_turn_rotation_speed := 1.5
 
-var in_detection_zone: PlayerWithinDetectionZone
-
 
 func _ready():
-	in_detection_zone = PlayerWithinDetectionZone.new()
 	inactive_behavior = FlyRandomly.new(
 		_rng_key("inactive"), inactive_turn_frequency, inactive_speed
 	)
@@ -31,6 +28,6 @@ func _ready():
 
 
 func select_next_behavior() -> AnimalBehavior:
-	if in_detection_zone.is_matched_by(self):
+	if is_player_in_detection_radius:
 		return active_behavior
 	return inactive_behavior

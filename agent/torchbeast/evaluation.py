@@ -19,13 +19,13 @@ from agent.evaluation import EVAL_TEMP_PATH
 from agent.evaluation import EvaluationGodotEnv
 from agent.evaluation import get_wandb_result_key
 from agent.evaluation import get_world_folders
-from agent.evaluation import load_checkpoint_from_wandb_run
 from agent.evaluation import world_id_from_world_folder_name
 from agent.torchbeast.avalon_helpers import force_cudnn_initialization
 from agent.torchbeast.avalon_helpers import wrap_evaluation_godot_env
 from agent.torchbeast.core.environment import Environment
 from agent.torchbeast.polybeast_learner import Net
 from common.log_utils import logger
+from common.wandb_utils import load_checkpoint_from_wandb_run
 from contrib.s3_utils import SimpleS3Client
 
 

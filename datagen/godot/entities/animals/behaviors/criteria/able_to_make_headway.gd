@@ -1,3 +1,5 @@
+# Whether this animal can "make headway" with their current behavior,
+# based on the heuristic "has traveled at least required_movement_distance before the given give_up_hops"
 extends BehaviorCriteria
 
 class_name AbleToMakeHeadway

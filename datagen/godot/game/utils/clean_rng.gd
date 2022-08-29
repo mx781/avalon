@@ -2,8 +2,7 @@ extends Reference
 
 class_name CleanRNG
 
-var _seed_int := 0
-var _video_id := 0
+var _episode_id := 0
 var _frame_id := 0
 
 const _cached_rng = {}
@@ -30,17 +29,15 @@ func get_rng(key: String) -> RandomNumberGenerator:
 	if rng == null:
 		rng = RandomNumberGenerator.new()
 		rng.seed = self._str_hash(key)
-		rng.seed = (rng.randi() << 32) ^ _seed_int
-		rng.seed = (rng.randi() << 32) ^ _video_id
+		rng.seed = (rng.randi() << 32) ^ _episode_id
 		rng.seed = (rng.randi() << 32) ^ _frame_id
 		_cached_rng[key] = rng
 	return rng
 
 
-func set_seed(video: int, frame: int, r_int: int, r_key: String) -> void:
+func set_seed(episode: int, frame: int) -> void:
 	_cached_rng.clear()
-	_seed_int = r_int ^ self._str_hash(r_key)
-	_video_id = video
+	_episode_id = episode
 	_frame_id = frame
 
 

@@ -29,7 +29,7 @@ class Timings:
     def reset(self):
         self.last_time = timeit.default_timer()
 
-    def time(self, name):
+    def time(self, name: str):
         """Save an update for event `name`.
 
         Nerd alarm: We could just store a
@@ -62,7 +62,7 @@ class Timings:
     def stds(self):
         return {k: v ** 0.5 for k, v in self._vars.items()}
 
-    def summary(self, prefix=""):
+    def summary(self, prefix: str = "") -> str:
         means = self.means()
         stds = self.stds()
         total = sum(means.values())

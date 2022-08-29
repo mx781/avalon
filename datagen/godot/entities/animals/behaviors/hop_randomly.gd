@@ -11,7 +11,7 @@ var hop_count: int
 var next_hop: int = 0
 
 var rng_key: String
-var rotation_dist = UniformDistribution.new(deg2rad(-179), deg2rad(180))
+var rotation_dist: UniformDistribution
 var hop_frequency_dist: ChoicesDistribution
 
 var turn_accuracy_threshold = deg2rad(7.5)
@@ -20,6 +20,7 @@ var turn_accuracy_threshold = deg2rad(7.5)
 func _init(_rng_key: String, hop_frequency: float, _hop: Vector2, _hop_count: int):
 	rng_key = _rng_key
 	hop_frequency_dist = ChoicesDistribution.new([false, true], [1 - hop_frequency, hop_frequency])
+	rotation_dist = UniformDistribution.new(deg2rad(-179), deg2rad(180))
 	hop_speed = _hop
 	hop_count = _hop_count
 

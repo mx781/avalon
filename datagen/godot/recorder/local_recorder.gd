@@ -18,7 +18,10 @@ func _open_file(path: String) -> File:
 
 
 func _get_file_path(filename: String) -> String:
-	return "%s/%s/%s/%s" % [dir_root, current_state["world_id"], current_state["run_id"], filename]
+	return (
+		"%s/%s/%s/%s.gz"
+		% [dir_root, current_state["world_id"], current_state["run_id"], filename]
+	)
 
 
 func save(key: String, file_type: String) -> void:
@@ -27,11 +30,12 @@ func save(key: String, file_type: String) -> void:
 	var path = _get_file_path(filename)
 	var file = _open_file(path)
 	print("saving to %s" % file.get_path())
+	var binary_data: PoolByteArray = []
 	match file_type:
 		JSON_FILE:
-			var line := JSON.print(data)
-			file.store_line(line)
+			binary_data = JSON.print(data).to_ascii()
 		BINARY_FILE:
-			for item in data:
-				file.store_buffer(item)
+			for byte_array in data:
+				binary_data.append_array(byte_array)
+	file.store_buffer(binary_data.compress(File.COMPRESSION_GZIP))
 	file.close()

@@ -1,3 +1,4 @@
+# For reference It takes a rabbit roughly 3 frames to hop at speed=Vector2(4, 1.25)
 extends CyclingBehavior
 
 class_name HopInDirection
@@ -5,7 +6,7 @@ class_name HopInDirection
 var direction: int  # -1 towards, 1 away, 2 towards territoriy
 var hop_speed: Vector2
 
-var fixed_point := Vector3.INF  # Optional
+var fixed_point := Vector3.INF
 
 var readiness_threshold = deg2rad(15)
 var turn_speed: float
@@ -13,7 +14,6 @@ var turn_speed: float
 var last_remaining_rotation := INF
 
 
-# NOTE It takes a rabbit roughly 3 frames to hop
 func _init(
 	_direction: int,
 	_hop_speed: Vector2,

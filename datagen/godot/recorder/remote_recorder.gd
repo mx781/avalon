@@ -30,8 +30,8 @@ func save(key: String, file_type: String) -> void:
 	print("upload succeeded with response %s" % _res)
 
 
-func start(apk_version: String, world_path: String, world_seed: int, video_id: int) -> void:
-	.start(apk_version, world_path, world_seed, video_id)
+func start(apk_version: String, world_path: String, episode: int) -> void:
+	.start(apk_version, world_path, episode)
 
 	var _res = client.start_world(current_state["world_id"], current_state["run_id"])
 	print("start succeeded with response %s" % _res)

@@ -20,7 +20,7 @@ transform = Transform( 3.25, 0, 0, 0, 3.25, 0, 0, 0, 3.25, 0, 0, 0 )
 mesh = ExtResource( 3 )
 material/0 = null
 
-[node name="closed_collision_shape" type="CollisionShape" parent="."]
+[node name="collision_shape" type="CollisionShape" parent="."]
 shape = SubResource( 4 )
 
 [node name="open_mesh" type="MeshInstance" parent="."]
@@ -28,7 +28,3 @@ transform = Transform( 3.25, 0, 0, 0, 3.25, 0, 0, 0, 3.25, 0, 0.03, 0 )
 visible = false
 mesh = ExtResource( 2 )
 material/0 = null
-
-[node name="open_collision_shape" type="CollisionShape" parent="."]
-shape = SubResource( 4 )
-disabled = true

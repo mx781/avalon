@@ -22,16 +22,19 @@ func _get_default_state() -> Dictionary:
 		"start_time": null,
 		"end_time": null,
 		"world_id": null,
-		"seed": null,
-		"video_id": null,
+		"episode_seed": null,
 		"apk_version": null,
+		"is_success": false,
 		"run_id": Tools.uuidv4()
 	}
 
 
 func is_recording_enabled_for_world() -> bool:
-	# TODO implement something more reasonable
 	return current_state.get("world_id") != null
+
+
+func record_result(_frame: int, is_success: bool) -> void:
+	current_state["is_success"] = is_success
 
 
 func record_action(_frame: int, action: PoolByteArray) -> void:
@@ -48,7 +51,6 @@ func record_human_input(_frame: int, human_input: PoolByteArray) -> void:
 	current_state[HUMAN_INPUT_KEY].append(stream.data_array + human_input)
 
 
-# TODO re-using code from _GymEnvBridge
 func write_value(buffer: StreamPeerBuffer, value, data_type):
 	match data_type:
 		TYPE_VECTOR2:
@@ -58,6 +60,11 @@ func write_value(buffer: StreamPeerBuffer, value, data_type):
 			buffer.put_float(value.x)
 			buffer.put_float(value.y)
 			buffer.put_float(value.z)
+		TYPE_QUAT:
+			buffer.put_float(value.x)
+			buffer.put_float(value.y)
+			buffer.put_float(value.z)
+			buffer.put_float(value.w)
 		TYPE_REAL:
 			buffer.put_float(value)
 		TYPE_INT:
@@ -66,14 +73,12 @@ func write_value(buffer: StreamPeerBuffer, value, data_type):
 			for inner_value in value:
 				write_value(buffer, inner_value, typeof(inner_value))
 		_:
-			HARD.stop("Unknown data type: %s", data_type)
+			HARD.stop("`recorder.write_value` unknown data type: %s", data_type)
 
 
 func _get_observation_byte_array(data: Dictionary) -> PoolByteArray:
 	var stream = StreamPeerBuffer.new()
 	for feature_name in data:
-		if feature_name == CONST.RGB_FEATURE or feature_name == CONST.DEPTH_FEATURE:
-			continue
 		var entry = data[feature_name]
 		var value = entry[0]
 		var data_type = entry[1]
@@ -137,11 +142,10 @@ func finish() -> void:
 	reset()
 
 
-func start(apk_version: String, world_path: String, world_seed: int, video_id: int) -> void:
+func start(apk_version: String, world_path: String, episode: int) -> void:
 	var world_id = WorldTools.get_world_id_from_world_path(world_path)
 	print("starting recording for %s (%s)" % [world_id, world_path])
 	current_state["start_time"] = OS.get_unix_time()
 	current_state["world_id"] = WorldTools.get_world_id_from_world_path(world_path)
-	current_state["seed"] = world_seed
-	current_state["video_id"] = video_id
+	current_state["episode_seed"] = episode
 	current_state["apk_version"] = apk_version

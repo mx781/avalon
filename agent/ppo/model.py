@@ -1,26 +1,52 @@
-import gym
-import torch.nn as nn
+# mypy: ignore-errors
+# TODO: type this file that's not used in production
+from abc import abstractmethod
+from typing import Callable
 
-from agent.action_model import DictActionHead
-from agent.observation_model import init
-from agent.observation_model import mlp_init
+import gym
+import numpy as np
+import torch.nn as nn
+from torch import Tensor
+from torch.nn import Module
+
+from agent.common.action_model import DictActionDist
+from agent.common.action_model import DictActionHead
+from agent.common.types import ObservationBatch
+
+
+class PPOModel(Module):
+    @abstractmethod
+    def forward(self, obs: ObservationBatch) -> tuple[Tensor, DictActionDist]:
+        raise NotImplementedError
+
+
+def init(module: Module, weight_init: Callable, bias_init: Callable, gain: float = 1) -> Module:
+    """Helper to initialize a layer weight and bias."""
+    weight_init(module.weight.data, gain=gain)
+    bias_init(module.bias.data)
+    return module
+
+
+def mlp_init(module: Module, gain: float = np.sqrt(2), bias: float = 0.0) -> Module:
+    """Helper to initialize a layer weight and bias."""
+    nn.init.orthogonal_(module.weight.data, gain=gain)
+    nn.init.constant_(module.bias.data, bias)
+    return module
 
 
 class Flatten(nn.Module):
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         return x.reshape(x.size(0), -1)
 
 
-class CNNBase(nn.Module):
-    def __init__(self, args, observation_space, action_space, hidden_size=512):
+class CNNBase(PPOModel):
+    def __init__(self, params, observation_space, action_space, hidden_size=512):
         """Initializer.
         num_channels: the number of channels in the input images (eg 3
             for RGB images, or 12 for a stack of 4 RGB images).
         num_outputs: the dimension of the output distribution.
         dist: the output distribution (eg Discrete or Normal).
         hidden_size: the size of the final actor+critic linear layers
-
-        TODO: this needs updated to the new action types.
         """
         super().__init__()
 
@@ -50,7 +76,7 @@ class CNNBase(nn.Module):
         init_ = lambda m: init(m, nn.init.orthogonal_, lambda x: nn.init.constant_(x, 0))
 
         self.critic_linear = mlp_init(nn.Linear(hidden_size, 1), gain=1.0)
-        self.action_head = DictActionHead(action_space, args)
+        self.action_head = DictActionHead(action_space, params)
         self.actor_linear = mlp_init(nn.Linear(hidden_size, self.action_head.num_inputs), gain=0.01)
 
     def forward(self, obs):
@@ -65,8 +91,8 @@ class CNNBase(nn.Module):
         return value, self.action_head(action_logits)
 
 
-class MLPBase(nn.Module):
-    def __init__(self, args, observation_space, action_space, hidden_size=64):
+class MLPBase(PPOModel):
+    def __init__(self, params, observation_space, action_space, hidden_size=64):
         super().__init__()
 
         assert isinstance(observation_space, gym.spaces.Dict)
@@ -75,7 +101,7 @@ class MLPBase(nn.Module):
         assert len(observation_space[self.key].shape) == 1
         num_inputs = observation_space[self.key].shape[0]
 
-        self.action_head = DictActionHead(action_space, args)
+        self.action_head = DictActionHead(action_space, params)
 
         self.actor = nn.Sequential(
             mlp_init(nn.Linear(num_inputs, hidden_size)),

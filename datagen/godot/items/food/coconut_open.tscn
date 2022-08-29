@@ -7,7 +7,7 @@
 bounce = 0.75
 absorbent = true
 
-[sub_resource type="BoxShape" id=4]
+[sub_resource type="BoxShape" id=6]
 extents = Vector3( 0.425, 0.5, 0.425 )
 
 [node name="coconut" type="RigidBody"]
@@ -19,6 +19,5 @@ transform = Transform( 3.25, 0, 0, 0, 3.25, 0, 0, 0, 3.25, 0, 0.03, 0 )
 mesh = ExtResource( 2 )
 material/0 = null
 
-[node name="open_collision_shape" type="CollisionShape" parent="."]
-shape = SubResource( 4 )
-disabled = true
+[node name="collision_shape" type="CollisionShape" parent="."]
+shape = SubResource( 6 )

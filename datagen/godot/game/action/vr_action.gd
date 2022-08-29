@@ -2,9 +2,13 @@ extends AvalonAction
 
 class_name VRAction
 
+var relative_origin_delta_rotation := Vector3.ZERO
+
 
 func reset() -> void:
 	.reset()
+
+	relative_origin_delta_rotation = Vector3.ZERO
 
 
 func to_byte_array() -> PoolByteArray:

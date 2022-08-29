@@ -1,3 +1,4 @@
+# Used by grounded predators to determine whether they should give up trying to chase the player
 extends AbleToMakeHeadway
 
 class_name PlayerReachableByGround
@@ -11,11 +12,9 @@ func _init(_out_of_reach_height: int, _required_movement_distance: int, _give_up
 	out_of_reach_height = _out_of_reach_height
 
 
-# used by grounded predators that consider giving up every step
-# TODO consider better/more robust mechanism for saying "The player is now climbing," etc
 func is_matched_by(predator: Animal) -> bool:
-	var is_ready = wait_to_consider_giving_up(predator)
-	if not is_ready:
+	var is_ready_to_evaluate_progress = wait_to_consider_giving_up(predator)
+	if not is_ready_to_evaluate_progress:
 		return is_able_to_make_headway
 
 	if is_able_to_make_headway:
@@ -24,8 +23,8 @@ func is_matched_by(predator: Animal) -> bool:
 			or _is_player_at_or_below_elevation(predator)
 		)
 	else:
-		# If we have already given up, don't reconsider until player comes down to our level again
-		is_able_to_make_headway = _is_player_at_or_below_elevation(predator)
+		var is_player_within_vertical_reach_again = _is_player_at_or_below_elevation(predator)
+		is_able_to_make_headway = is_player_within_vertical_reach_again
 
 	return is_able_to_make_headway
 

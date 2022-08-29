@@ -36,7 +36,7 @@ render_target_update_mode = 3
 shadow_atlas_size = 8
 
 [node name="depth_camera" type="Camera" parent="depth_viewport_container/depth_viewport"]
-transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -5.96046e-08, 0 )
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0 )
 keep_aspect = 0
 current = true
 fov = 90.0
@@ -58,7 +58,7 @@ shadow_atlas_size = 4096
 shadow_atlas_quad_0 = 1
 
 [node name="top_down_camera" type="Camera" parent="top_down_viewport_container/top_down_viewport"]
-transform = Transform( 1, 0, 0, 0, -4.37114e-08, 1, 0, -1, -4.37114e-08, 0, 15, 0 )
+transform = Transform( 1, 0, 0, 0, 0, 1, 0, -1, 0, 0, 1.5, 0 )
 keep_aspect = 0
 cull_mask = 1048573
 current = true
@@ -81,7 +81,7 @@ shadow_atlas_size = 4096
 shadow_atlas_quad_0 = 1
 
 [node name="isometric_camera" type="Camera" parent="isometric_viewport_container/isometric_viewport"]
-transform = Transform( 0.707107, -0.5, 0.5, 0, 0.707107, 0.707107, -0.707107, -0.5, 0.5, 6, 12, 6 )
+transform = Transform( 0.707107, -0.5, 0.5, 0, 0.707107, 0.707107, -0.707107, -0.5, 0.5, 1, 2, 1 )
 keep_aspect = 0
 cull_mask = 1048573
 current = true

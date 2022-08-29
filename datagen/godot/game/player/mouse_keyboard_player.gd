@@ -11,8 +11,8 @@ var is_left_hand_throwing := false
 var is_right_hand_throwing := false
 
 
-func ready() -> void:
-	.ready()
+func initialize() -> void:
+	.initialize()
 	is_crouched = false
 
 
@@ -163,12 +163,10 @@ func _get_all_energy_expenditures() -> Dictionary:
 	return expenditure
 
 
-# TODO move somewhere more generic
 static func resolve_climbing_velocity(
 	climbing_ray: RayCast, orientation_basis: Basis, linear_velocity: Vector2
 ) -> Vector3:
 	var normal = climbing_ray.get_collision_normal()
-	# TODO shouldn't this be negative?
 	var forward = orientation_basis.z
 	var right = orientation_basis.x
 	var climb_basis = Basis(right, normal.cross(right), normal).orthonormalized()

@@ -19,9 +19,6 @@ func do(animal, delta: float) -> Vector3:
 	elif is_resting_after_attack(animal):
 		return animal.controller.move(animal.get_ongoing_movement(), delta)
 
-	# TODO predators have NaturalWeapons that handle damaging the player.
-	# If we want them to be anywhere but the mouth, this behavior will have to tilt them into attack position
-
 	return pursue_behavior.do(animal, delta)
 
 

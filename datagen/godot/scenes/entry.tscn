@@ -229,7 +229,7 @@ size = Vector3( 154, 2, 154 )
 resource_local_to_scene = true
 extents = Vector3( 77, 0.5, 77 )
 
-[node name="sim" type="Node"]
+[node name="Avalon" type="Spatial"]
 
 [node name="teleporters" type="Spatial" parent="."]
 transform = Transform( -4.37114e-08, 0, 1, 0, 1, 0, -1, 0, -4.37114e-08, -4, 2, 0 )
@@ -327,12 +327,13 @@ climb_map_y = 257
 physics_material_override = SubResource( 3 )
 
 [node name="static_collision_shape_0" type="CollisionShape" parent="TerrainManager/terrain_collision_meshes/static_collision_0"]
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, -0.310356, 0, 0.163167 )
 shape = SubResource( 4 )
 
 [node name="dynamic_tracker" type="Node" parent="."]
 
 [node name="SpawnPoint" type="Spatial" parent="dynamic_tracker"]
-transform = Transform( 0.965926, 0, -0.258819, 0, 1, 0, 0.258819, 0, 0.965926, -4.27211, 2.85562, 1.26759 )
+transform = Transform( 0.965926, 0, -0.258819, 0, 1, 0, 0.258819, 0, 0.965926, 4, 2.856, 1 )
 
 [node name="tree_collision_meshes" type="Spatial" parent="."]
 

@@ -55,8 +55,9 @@ disabled = true
 [node name="ground_ray" type="RayCast" parent="physical_body"]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0 )
 visible = false
-enabled = true
+ enabled = true
 cast_to = Vector3( 0, -1.99, 0 )
+
 
 [node name="physical_head" type="RigidBody" parent="."]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0 )
@@ -102,7 +103,6 @@ shape = SubResource( 3 )
 disabled = true
 
 [node name="marker" type="MeshInstance" parent="physical_left_hand"]
-visible = false
 mesh = SubResource( 7 )
 material/0 = ExtResource( 1 )
 
@@ -117,6 +117,5 @@ shape = SubResource( 4 )
 disabled = true
 
 [node name="marker" type="MeshInstance" parent="physical_right_hand"]
-visible = false
 mesh = SubResource( 7 )
 material/0 = ExtResource( 1 )

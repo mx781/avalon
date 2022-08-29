@@ -1,6 +1,7 @@
 import math
 import os
 import re
+import shutil
 import struct
 import tarfile
 import time
@@ -47,8 +48,11 @@ from common.utils import only
 from datagen.errors import GodotError
 from datagen.generate import InteractiveGodotProcess
 from datagen.generate import get_first_run_action_record_path
+from datagen.godot_base_types import Vector3
 from datagen.godot_generated_types import ACTION_MESSAGE
 from datagen.godot_generated_types import CLOSE_MESSAGE
+from datagen.godot_generated_types import DEBUG_CAMERA_ACTION_MESSAGE
+from datagen.godot_generated_types import HUMAN_INPUT_MESSAGE
 from datagen.godot_generated_types import QUERY_AVAILABLE_FEATURES_MESSAGE
 from datagen.godot_generated_types import RENDER_MESSAGE
 from datagen.godot_generated_types import RESET_MESSAGE
@@ -57,6 +61,7 @@ from datagen.godot_generated_types import SELECT_FEATURES_MESSAGE
 from datagen.godot_generated_types import SimSpec
 
 # Mapping of feature name to (data_type, shape).
+from datagen.world_creation.constants import STARTING_HIT_POINTS
 from datagen.world_creation.constants import AvalonTask
 from datagen.world_creation.constants import AvalonTaskGroup
 from datagen.world_creation.world_generator import BlockingWorldGenerator
@@ -69,6 +74,8 @@ _FeatureSpecDict = OrderedDict[str, Tuple[int, Tuple[int, ...]]]
 _FeatureDataDict = Dict[str, npt.NDArray]
 
 GODOT_ERROR_LOG_PATH = "/mnt/private/godot"
+
+OPTIONAL_FEATURES = ["isometric_rgbd", "top_down_rgbd"]
 
 
 class ActionProtocol(Protocol):
@@ -184,6 +191,7 @@ class GoalProgressResult:
     reward: float
     is_done: bool
     log: Dict[str, Any]
+    world_path: Optional[str] = None
 
 
 class GoalEvaluator(Generic[ObsType]):
@@ -291,14 +299,14 @@ class _GodotEnvBridge(Generic[ActionType]):
         cls,
         process: InteractiveGodotProcess,
         screen_resolution: Tuple[int, int],
-        build_timeout_seconds: float = 15.0,
-        close_timeout_seconds: float = 15.0,
+        build_timeout_seconds: float = 30.0,
+        close_timeout_seconds: float = 30.0,
     ) -> "_GodotEnvBridge":
         """Create pipes while starting process so that the bridge doesn't block.
 
         Waits for godot to send a ready signal before returning
         """
-        kill_switch = _BridgeKillSwitch(process, check_period_seconds=3.0, default_timeout=15.0)
+        kill_switch = _BridgeKillSwitch(process, check_period_seconds=5.0, default_timeout=30.0)
         with kill_switch.watch_blocking_action(build_timeout_seconds):
             _mkpipe(process.action_pipe_path)
             _mkpipe(process.observation_pipe_path)
@@ -344,23 +352,32 @@ class _GodotEnvBridge(Generic[ActionType]):
             feature_names_bytes = ("\n".join(selected_features.keys()) + "\n").encode("UTF-8")
             self._send_message(SELECT_FEATURES_MESSAGE, size_doubleword + feature_names_bytes)
 
-    def seed(self, seed: int, video_id: int):
+    def seed(self, episode_seed: int):
         with self._kill_switch.watch_blocking_action():
-            message_bytes = seed.to_bytes(8, byteorder="little", signed=True)
-            message_bytes += video_id.to_bytes(8, byteorder="little", signed=True)
+            message_bytes = episode_seed.to_bytes(8, byteorder="little", signed=True)
             self._send_message(SEED_MESSAGE, message_bytes)
 
-    def reset(self, null_action: ActionType, level: str, starting_hit_points: float) -> _FeatureDataDict:
+    def reset(
+        self, null_action: ActionType, episode_seed: int, world_path: str, starting_hit_points: float
+    ) -> _FeatureDataDict:
         with self._kill_switch.watch_blocking_action():
             self._send_message(
                 RESET_MESSAGE,
-                (level + "\n").encode("UTF-8") + _to_bytes(float, starting_hit_points) + null_action.to_bytes(),
+                null_action.to_bytes()
+                + episode_seed.to_bytes(8, byteorder="little", signed=True)
+                + (world_path + "\n").encode("UTF-8")
+                + _to_bytes(float, starting_hit_points),
             )
             return self._read_features(self._selected_features)
 
     def act(self, action: ActionType) -> _FeatureDataDict:
         with self._kill_switch.watch_blocking_action():
             self._send_message(ACTION_MESSAGE, action.to_bytes())
+            return self._read_features(self._selected_features)
+
+    def debug_act(self, action: "DebugCameraAction") -> _FeatureDataDict:
+        with self._kill_switch.watch_blocking_action():
+            self._send_message(DEBUG_CAMERA_ACTION_MESSAGE, action.to_bytes())
             return self._read_features(self._selected_features)
 
     def render(self) -> npt.NDArray:
@@ -373,9 +390,18 @@ class _GodotEnvBridge(Generic[ActionType]):
             self._send_message(CLOSE_MESSAGE, bytes())
 
     def after_close(self) -> None:
-        self._action_pipe.close()
-        self._observation_pipe.close()
-        self._action_record_pipe.close()
+        try:
+            self._action_pipe.close()
+        except BrokenPipeError:
+            pass
+        try:
+            self._observation_pipe.close()
+        except BrokenPipeError:
+            pass
+        try:
+            self._action_record_pipe.close()
+        except BrokenPipeError:
+            pass
 
     def _send_message(self, message_type: int, message: bytes):
         """Send a message down the godot action pipe.
@@ -402,9 +428,16 @@ class _GodotEnvBridge(Generic[ActionType]):
         shape: Tuple[int, ...],
         size: Optional[int] = None,
         dtype: npt.DTypeLike = np.uint8,
+        feature_name: Optional[str] = None,
     ) -> npt.NDArray:
-        byte_buffer = self._observation_pipe.read(size if size is not None else prod(shape))
-        return np.ndarray(shape=shape, dtype=dtype, buffer=byte_buffer)
+        read_size = size if size is not None else prod(shape)
+        byte_buffer = self._observation_pipe.read(read_size)
+        try:
+            return np.ndarray(shape=shape, dtype=dtype, buffer=byte_buffer)
+        except TypeError as te:
+            raise GodotError(
+                f"Invalid number of bytes for feature {feature_name}: got {len(byte_buffer)}, expected {read_size} of {dtype}"
+            ) from te
 
     def _read_features(self, selected_features: _FeatureSpecDict) -> _FeatureDataDict:
         feature_data: _FeatureDataDict = {}
@@ -412,7 +445,9 @@ class _GodotEnvBridge(Generic[ActionType]):
             size = prod(dims)
             if data_type != FAKE_TYPE_IMAGE:
                 size = size * 4
-            feature_data[feature_name] = self._read_shape(dims, size, dtype=NP_DTYPE_MAP[data_type])
+            feature_data[feature_name] = self._read_shape(
+                dims, size, dtype=NP_DTYPE_MAP[data_type], feature_name=feature_name
+            )
         return feature_data
 
 
@@ -440,7 +475,10 @@ class GodotObservationContext(Generic[ObservationType]):
         selected_features: _FeatureSpecDict = OrderedDict()
         for field in self.observation_type.get_selected_features():
             type_and_dims = self.available_features.get(field, None)
-            if type_and_dims is None:
+            # TODO: think of a cleaner way to make these optional?
+            if type_and_dims is None and field in OPTIONAL_FEATURES:
+                continue
+            elif type_and_dims is None and field not in OPTIONAL_FEATURES:
                 raise InvalidObservationType(
                     f"Could not find requested feature '{field}'. Available features are: {list(self.available_features)}"
                 )
@@ -523,6 +561,7 @@ class GodotEnv(gym.Env, Generic[ObservationType, ActionType]):
         is_error_log_checked_after_each_step: bool = True,
         is_observation_space_flattened: bool = False,
         is_godot_restarted_on_error: bool = False,
+        is_dev_flag_added: bool = False,
     ):
         self.config = config
         self.action_type = action_type
@@ -544,7 +583,7 @@ class GodotEnv(gym.Env, Generic[ObservationType, ActionType]):
         self.world_generator = self._create_world_generator()
 
         self.gpu_id = gpu_id
-        self.process = InteractiveGodotProcess(self.config, gpu_id=self.gpu_id)
+        self.process = InteractiveGodotProcess(self.config, is_dev_flag_added=is_dev_flag_added, gpu_id=self.gpu_id)
         self._bridge: _GodotEnvBridge[ActionType] = _GodotEnvBridge.build_by_starting_process(
             self.process,
             screen_resolution=(self.config.recording_options.resolution_x, self.config.recording_options.resolution_y),
@@ -556,18 +595,22 @@ class GodotEnv(gym.Env, Generic[ObservationType, ActionType]):
             available_features=self._bridge.query_available_features(),
         )
         self._bridge.select_and_cache_features(self.observation_context.selected_features)
-        self.seed_nicely(self.config.random_int, -1)
+        self.seed_nicely(0)
         self._recent_levels: Deque[GenerateWorldParams] = deque()
 
     def _create_world_generator(self) -> WorldGenerator:
         return BlockingWorldGenerator(
-            output_path=Path("/tmp/level_gen"), seed=2, start_difficulty=0, task_groups=(AvalonTaskGroup.ONE,)
+            base_path=Path("/tmp/level_gen"), seed=2, start_difficulty=0, task_groups=(AvalonTaskGroup.ONE,)
         )
 
     def _restart_godot_quietly(self):
         if self.is_running:
             if self._bridge.is_open:
-                self._bridge.close()
+                try:
+                    self._bridge.close()
+                except BrokenPipeError:
+                    # Handle this error because there's a good chance that godot has crashed.
+                    logger.info("caught broken pipe when restarting godot")
             if not self.process.is_closed:
                 self.process.close(kill=True, raise_logged_errors=False)
             self._bridge.after_close()
@@ -606,12 +649,10 @@ class GodotEnv(gym.Env, Generic[ObservationType, ActionType]):
     def seed(self, seed: Optional[int] = None):
         if seed is None:
             seed = _randint_of_size(np.int64)
-        video_id = _randint_of_size(np.int64)
-        return self.seed_nicely(seed, video_id)
+        return self.seed_nicely(seed)
 
-    def seed_nicely(self, seed: int, video_id: int):
-        self._latest_seed = seed
-        return self._bridge.seed(seed, video_id)
+    def seed_nicely(self, episode_seed: int):
+        return self._bridge.seed(episode_seed)
 
     def step(self, action: npt.NDArray):
         observation, goal_progress = self.act(self.action_type.from_input(action))
@@ -625,12 +666,22 @@ class GodotEnv(gym.Env, Generic[ObservationType, ActionType]):
         # TODO: probably put this back, make sufficiently precise and condition on is_action_shape_checked
         # assert self.action_space.contains(attr.asdict(action)), f"Invalid action: {action}"
 
-        feature_data = self._bridge.act(action)
+        try:
+            feature_data = self._bridge.act(action)
+        except GodotError:
+            # Godot error prevented reading feature data...
+            self._check_for_errors_and_collect_artifacts()
+            raise
         observation = self._read_observation_reply(feature_data)
 
         goal_progress = self.goal_evaluator.calculate_goal_progress(observation)
         self.episode_tracker.step_count_for_current_episode += 1
         return observation, goal_progress
+
+    def debug_act(self, action: "DebugCameraAction") -> ObservationType:
+        assert isinstance(action, DebugCameraAction), f"Must pass `DebugCameraAction` objects to debug_act"
+        feature_data = self._bridge.debug_act(action)
+        return self._read_observation_reply(feature_data)
 
     def _read_observation_reply(self, feature_data: _FeatureDataDict) -> ObservationType:
         self._latest_screen = feature_data["rgb"] if "rgb" in self.observation_context.selected_features else None
@@ -651,14 +702,13 @@ class GodotEnv(gym.Env, Generic[ObservationType, ActionType]):
         lame_observation = self.observation_context.lamify(observation)
         return lame_observation
 
-    def reset_nicely(self, *, world_id: Optional[int] = None) -> ObservationType:
+    def reset_nicely(self, *, world_id: Optional[int] = None, episode_seed: Optional[int] = None) -> ObservationType:
         self._latest_screen = None
         is_first_reset = not self.is_reset_called_already
         self.is_reset_called_already = True
 
-        if world_id is not None:
-            # reset will increment video_id on the godot side, so we decrement by one before calling seed
-            self.seed_nicely(self._latest_seed, world_id - 1)
+        if episode_seed is None:
+            episode_seed = 0
 
         world_params = self._get_world_params_by_id(world_id)
 
@@ -669,10 +719,9 @@ class GodotEnv(gym.Env, Generic[ObservationType, ActionType]):
 
         self._check_for_errors_and_collect_artifacts()
 
-        # TODO agent passes back the world path while human player advance with world id
         world_path = f"{world_params.output}/main.tscn"
         initial_state_features = self._bridge.reset(
-            self.action_type.get_null_action(), world_path, world_params.starting_hit_points
+            self.action_type.get_null_action(), episode_seed, world_path, STARTING_HIT_POINTS
         )
         observation = self._read_observation_reply(initial_state_features)
 
@@ -684,16 +733,16 @@ class GodotEnv(gym.Env, Generic[ObservationType, ActionType]):
 
     # note: this is for human playback
     def reset_nicely_with_specific_world(
-        self, *, seed: int, world_id: int, world_path: str, starting_hit_points: float = 1.0
+        self, *, episode_seed: int, world_path: str, starting_hit_points: float = 1.0
     ) -> ObservationType:
         self._latest_screen = None
         is_first_reset = not self.is_reset_called_already
         self.is_reset_called_already = True
 
-        self.seed_nicely(seed, world_id)
+        self.seed_nicely(episode_seed)
 
         initial_state_features = self._bridge.reset(
-            self.action_type.get_null_action(), world_path, starting_hit_points
+            self.action_type.get_null_action(), episode_seed, world_path, starting_hit_points
         )
         observation = self._read_observation_reply(initial_state_features)
 
@@ -713,32 +762,31 @@ class GodotEnv(gym.Env, Generic[ObservationType, ActionType]):
             self.process.close(kill=False)
         self._bridge.after_close()
         self.episode_tracker.wait_for_last_episode_adjustment()
+        self.world_generator.close()
+        shutil.rmtree(self.config.dir_root, ignore_errors=True)
 
     def get_action_log(self) -> "GodotEnvActionLog[ActionType]":
         return GodotEnvActionLog.parse(self.process.action_record_path, self.action_type)
 
     def _check_for_errors_and_collect_artifacts(self):
         try:
-            try:
-                self.process.check_for_errors()
-            except GodotError as ge:
-                capture_exception(ge)
-                os.makedirs(GODOT_ERROR_LOG_PATH, exist_ok=True)
-                tar_path = f"{GODOT_ERROR_LOG_PATH}/{uuid.uuid4()}.tar"
-                with tarfile.open(tar_path, "x:gz") as f:
-                    f.add(self.process.action_record_path)
-                    f.add(self.process.log_path)
-                    f.add(self.process.config_path)
-                    for level in self._recent_levels:
-                        f.add(level.output)
-                logger.warning(f"Godot failed! Saved recent godot levels and logs to {tar_path}")
-                if self.is_godot_restarted_on_error:
-                    logger.warning("Restarting godot!")
-                    self._restart_godot_quietly()
-                else:
-                    raise
-        except Exception as e:
-            capture_exception(e)
+            self.process.check_for_errors()
+        except GodotError as ge:
+            capture_exception(ge)
+            os.makedirs(GODOT_ERROR_LOG_PATH, exist_ok=True)
+            tar_path = f"{GODOT_ERROR_LOG_PATH}/{uuid.uuid4()}.tar"
+            with tarfile.open(tar_path, "x:gz") as f:
+                f.add(self.process.action_record_path)
+                f.add(self.process.log_path)
+                f.add(self.process.config_path)
+                for level in self._recent_levels:
+                    f.add(level.output)
+            logger.warning(f"Godot failed! Saved recent godot levels and logs to {tar_path}")
+            if self.is_godot_restarted_on_error:
+                logger.warning("Restarting godot!")
+                self._restart_godot_quietly()
+            else:
+                raise
 
     def _spawn_fresh_env(self) -> "GodotEnv[ObservationType, ActionType]":
         "Spawns a new GodotEnv with the same initial arguments as this one."
@@ -768,50 +816,35 @@ TYPE_INT = 2
 TYPE_REAL = 3
 TYPE_VECTOR2 = 5
 TYPE_VECTOR3 = 7
+TYPE_QUAT = 10
 
 NP_DTYPE_MAP: Dict[int, Type[np.number]] = {
     TYPE_INT: np.int32,
     TYPE_REAL: np.float32,
     TYPE_VECTOR2: np.float32,
     TYPE_VECTOR3: np.float32,
+    TYPE_QUAT: np.float32,
     FAKE_TYPE_IMAGE: np.uint8,
 }
 
 
+# TODO: this can be removed
 class _EpisodeTracker:
     def __init__(self, config: SimSpec):
         self._config = config
-        self._file_renaming_thread = None
         self.episode_count = 0
         self.step_count_for_current_episode = 0
 
-    @property
-    def _current_episode_folder(self):
-        return os.path.join(self._config.get_dir_root(), f"{self.episode_count:06d}")
+    def _episode_folder(self, episode_number: int):
+        return os.path.join(self._config.get_dir_root(), f"{episode_number:06d}")
 
     def adjust_filename_frame_counts_and_complete_episode(self):
-        if self._file_renaming_thread is not None:
-            self._file_renaming_thread.join()
-            self._file_renaming_thread = None
-
-        self._file_renaming_thread = Thread(
-            target=_rename_raw_files,
-            args=(
-                self._current_episode_folder,
-                # match frame_max in a segment or end of filename,
-                f"_{self._config.frame_max}(_|\\.)",
-                f"_{self.step_count_for_current_episode}\\1",
-            ),
-        )
-        self._file_renaming_thread.start()
         self.episode_count += 1
         self.step_count_for_current_episode = 0
 
     def wait_for_last_episode_adjustment(self):
         if self.step_count_for_current_episode > 0:
             self.adjust_filename_frame_counts_and_complete_episode()
-        if self._file_renaming_thread is not None:
-            self._file_renaming_thread.join()
 
 
 def _mkpipe(pipe: str):
@@ -880,18 +913,22 @@ def flatten_observation(observation: ObservationType, flattened_observation_keys
 
 _NoPayloadMessageTypes = Literal[2, 5, 6]
 _NoPayloadMessage = Tuple[_NoPayloadMessageTypes]
-_SeedMessage = Tuple[Literal[1], int, int]
+_SeedMessage = Tuple[Literal[1], int]
 _SelectFeaturesMessage = Tuple[Literal[4], List[str]]
-_ActionMessage = Tuple[Literal[3, 0], ActionType]
-_ResetMessage = Tuple[str, Literal[3, 0], ActionType]
+_ActionMessage = Tuple[Literal[3, 9], ActionType]
+_DebugMessage = Tuple[Literal[7], "DebugCameraAction"]
+_ResetMessage = Tuple[Literal[3, 0], ActionType, int, str, float]
 _RawMessage = Union[
     _NoPayloadMessage,
     _SeedMessage,
     _SelectFeaturesMessage,
     _ActionMessage[ActionType],
     _ResetMessage[ActionType],
+    _DebugMessage,
 ]
 _no_payload_messages: Set[_NoPayloadMessageTypes] = {RENDER_MESSAGE, QUERY_AVAILABLE_FEATURES_MESSAGE, CLOSE_MESSAGE}
+
+_ActionOrDebugMessage = Union[_ActionMessage[ActionType], _DebugMessage]
 
 
 def _parse_raw_message_log(
@@ -900,33 +937,41 @@ def _parse_raw_message_log(
 ) -> Iterator[_RawMessage[ActionType]]:
     while message_bytes := record_log.read(1):
         message = int.from_bytes(message_bytes, byteorder="little", signed=False)
-
         if message in _no_payload_messages:
             # TODO remove cast when mypy can refine types (https://github.com/python/mypy/issues/12535)
             yield cast(_NoPayloadMessage, (message,))
 
         elif message == SEED_MESSAGE:
-            seed = int.from_bytes(record_log.read(8), byteorder="little", signed=True)
-            video_id = int.from_bytes(record_log.read(8), byteorder="little", signed=True)
-            yield cast(_SeedMessage, (message, seed, video_id))
+            episode_seed = int.from_bytes(record_log.read(8), byteorder="little", signed=True)
+            yield cast(_SeedMessage, (message, episode_seed))
 
         elif message == SELECT_FEATURES_MESSAGE:
             count = int.from_bytes(record_log.read(4), byteorder="little", signed=False)
             feature_names = list(record_log.readline().decode("UTF-8")[:-1] for _ in range(count))
             yield cast(_SelectFeaturesMessage, (message, feature_names))
 
-        elif message == ACTION_MESSAGE:
+        elif message in (
+            ACTION_MESSAGE,
+            HUMAN_INPUT_MESSAGE,
+            DEBUG_CAMERA_ACTION_MESSAGE,
+        ):
             size_bytes = record_log.read(4)
             size, _ = _from_bytes(int, size_bytes)
             action_bytes = size_bytes + record_log.read(cast(int, size))
-            yield cast(_ActionMessage, (message, action_from_bytes(action_bytes)))
+            yield cast(_ActionOrDebugMessage, (message, action_from_bytes(action_bytes)))
 
         elif message == RESET_MESSAGE:
-            level_name = record_log.readline()
             size_bytes = record_log.read(4)
             size, _ = _from_bytes(int, size_bytes)
             action_bytes = size_bytes + record_log.read(cast(int, size))
-            yield cast(_ResetMessage, (message, level_name, action_from_bytes(action_bytes)))
+            episode_seed = int.from_bytes(record_log.read(8), byteorder="little", signed=True)
+            world_path = record_log.readline()
+            starting_hit_points_bytes = record_log.read(4)
+            starting_hit_points = _from_bytes(float, starting_hit_points_bytes)
+            yield cast(
+                _ResetMessage,
+                (message, action_from_bytes(action_bytes), episode_seed, world_path, starting_hit_points),
+            )
         else:
             raise SwitchError(f"Invalid message type {message}")
 
@@ -935,35 +980,36 @@ def _parse_raw_message_log(
 class GodotEnvActionLog(Generic[ActionType]):
     path: str
     selected_features: List[str]
-    initial_seed: int
-    initial_video_id: int
+    initial_episode_id: int
     messages: List[_RawMessage[ActionType]]
 
     @classmethod
     def parse(cls, action_log_path: str, action_type: Type[ActionType]) -> "GodotEnvActionLog[ActionType]":
+        avaliable_features_query, select_features, initial_seed, *messages, close = cls.parse_message_log(
+            action_log_path, action_type
+        )
+        assert avaliable_features_query[0] == QUERY_AVAILABLE_FEATURES_MESSAGE, (
+            f"First logged message was {avaliable_features_query} but should always be a "
+            f"QUERY_AVAILABLE_FEATURES_MESSAGE ({QUERY_AVAILABLE_FEATURES_MESSAGE})"
+        )
+        assert select_features[0] == SELECT_FEATURES_MESSAGE, (
+            f"Second logged message was {select_features} but should always be a "
+            f"SELECT_FEATURES_MESSAGE ({SELECT_FEATURES_MESSAGE})"
+        )
+        assert initial_seed[0] == SEED_MESSAGE, (
+            f"Third logged message was {initial_seed} but should always be a "
+            f"SELECT_FEATURES_MESSAGE ({SEED_MESSAGE})"
+        )
+        if close[0] != CLOSE_MESSAGE:
+            logger.warning(f"{action_log_path}'s last logged message {close} is not a CLOSE_MESSAGE")
+            messages.append(close)
+        return cls(action_log_path, select_features[1], initial_seed[1], messages)
+
+    @classmethod
+    def parse_message_log(cls, action_log_path: str, action_type: Type[ActionType]) -> List[_RawMessage[ActionType]]:
         action_parser: Callable[[bytes], ActionType] = action_type.from_bytes
         with open(action_log_path, _BINARY_READ) as log:
-            avaliable_features_query, select_features, initial_seed, *messages, close = _parse_raw_message_log(
-                log, action_parser
-            )
-            assert avaliable_features_query[0] == QUERY_AVAILABLE_FEATURES_MESSAGE, (
-                f"First logged message was {avaliable_features_query} but should always be a "
-                f"QUERY_AVAILABLE_FEATURES_MESSAGE ({QUERY_AVAILABLE_FEATURES_MESSAGE})"
-            )
-            assert select_features[0] == SELECT_FEATURES_MESSAGE, (
-                f"Second logged message was {select_features} but should always be a "
-                f"SELECT_FEATURES_MESSAGE ({SELECT_FEATURES_MESSAGE})"
-            )
-            assert initial_seed[0] == SEED_MESSAGE, (
-                f"Third logged message was {initial_seed} but should always be a "
-                f"SELECT_FEATURES_MESSAGE ({SEED_MESSAGE})"
-            )
-            # TODO this is not always true anymore with human playback
-            # assert initial_seed[2] == 0, f"Initial seed video_id {initial_seed[2]} != 0"
-            if close[0] != CLOSE_MESSAGE:
-                logger.warning(f"{action_log_path}'s last logged message {close} is not a CLOSE_MESSAGE")
-                messages.append(close)
-            return cls(action_log_path, select_features[1], initial_seed[1], initial_seed[2], messages)
+            return list(_parse_raw_message_log(log, action_parser))
 
 
 @attr.s(auto_attribs=True, frozen=True, slots=True)
@@ -981,10 +1027,6 @@ class GodotEnvReplay(Generic[ObservationType, ActionType]):
         env = self.env
         action_log = self.action_log
         assert not env.is_reset_called_already, f"{env} looks like it has already been run."
-        assert env.config.random_int == action_log.initial_seed, (
-            f"{env}.config.random_int {env.config.random_int} does not match "
-            f"logged seed {action_log.initial_seed} from {action_log.path}"
-        )
         selected_feature_names = list(env.observation_context.selected_features.keys())
         assert selected_feature_names == action_log.selected_features, (
             f"{env}'s selected_features names {selected_feature_names} does not match "
@@ -998,13 +1040,16 @@ class GodotEnvReplay(Generic[ObservationType, ActionType]):
             if message[0] == ACTION_MESSAGE:
                 action = message[1]
                 yield env.act(action)
+            if message[0] == DEBUG_CAMERA_ACTION_MESSAGE:
+                debug_action = message[1]
+                yield env.debug_act(debug_action), None
             elif message[0] == RESET_MESSAGE:
-                yield (env.reset_nicely(), message[1], None)
+                yield env.reset_nicely(episode_seed=message[1]), None
             elif message[0] == RENDER_MESSAGE:
                 yield env.render()
             elif message[0] == SEED_MESSAGE:
-                seed, video_id = message[1:]
-                yield env.seed_nicely(seed, video_id)
+                episode_id = message[1]
+                yield env.seed_nicely(episode_id)
             else:
                 raise SwitchError(f"Invalid replay message {message}")
 
@@ -1093,11 +1138,19 @@ class MouseKeyboardActionType(AttrsAction):
 @attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
 class AvalonObservationType(AttrsObservation):
     rgbd: npt.NDArray[np.uint8]
-    video_id: npt.NDArray[np.int32]
+    episode_id: npt.NDArray[np.int32]
     frame_id: npt.NDArray[np.int32]
     reward: npt.NDArray[np.float32]
     is_done: npt.NDArray[np.float32]
     is_dead: npt.NDArray[np.float32]
+
+    target_head_position: npt.NDArray[np.float32]
+    target_left_hand_position: npt.NDArray[np.float32]
+    target_right_hand_position: npt.NDArray[np.float32]
+
+    target_head_rotation: npt.NDArray[np.float32]
+    target_left_hand_rotation: npt.NDArray[np.float32]
+    target_right_hand_rotation: npt.NDArray[np.float32]
 
     physical_body_position: npt.NDArray[np.float32]
     physical_head_position: npt.NDArray[np.float32]
@@ -1138,10 +1191,13 @@ class AvalonObservationType(AttrsObservation):
     physical_right_hand_kinetic_energy_expenditure: npt.NDArray[np.float32]
     physical_right_hand_potential_energy_expenditure: npt.NDArray[np.float32]
     fall_damage: npt.NDArray[np.float32]
-    total_energy_expenditure: npt.NDArray[np.float32]
     hit_points_lost_from_enemies: npt.NDArray[np.float32]
     hit_points_gained_from_eating: npt.NDArray[np.float32]
     hit_points: npt.NDArray[np.float32]
+
+    # TODO: think of a cleaner way to make these optional?
+    isometric_rgbd: npt.NDArray[np.uint8] = np.array([], dtype=np.uint8)
+    top_down_rgbd: npt.NDArray[np.uint8] = np.array([], dtype=np.uint8)
 
     @classmethod
     def get_space_for_attribute(cls, feature: str, data_type: int, shape: Tuple[int, ...]) -> Optional[spaces.Space]:
@@ -1170,10 +1226,10 @@ class AvalonObservationType(AttrsObservation):
             "right_hand_thing_colliding_with_hand",
             "right_hand_held_thing",
             "fall_damage",
-            "total_energy_expenditure",
             "hit_points_lost_from_enemies",
             "hit_points_gained_from_eating",
             "hit_points",
+            "frame_id",  # TODO: this will actually be frames_remaining
         )
 
 
@@ -1182,68 +1238,196 @@ FRAMES_PER_MINUTE = 600
 
 @attr.s(auto_attribs=True, collect_by_mro=True)
 class GodotGoalEvaluator(GoalEvaluator[AvalonObservationType]):
+    score_cost_per_frame: float = 1e-4
+    frame_limit: int = 9000
+
     def calculate_goal_progress(self, observation: AvalonObservationType) -> GoalProgressResult:
-        self.update_score(observation)
+        remaining_frames = self.frame_limit - observation.frame_id.item() - 1
+        if not self.is_all_food_eaten:
+            self.score = max(
+                0,
+                observation.hit_points.item() + remaining_frames * self.score_cost_per_frame - self.initial_hit_points,
+            )
+        self.is_all_food_eaten = observation.is_food_present_in_world.item() < 0.5
 
         is_done = observation.is_done.item() > 0
 
         truncated = False
-        if not is_done and observation.frame_id.item() + 1 >= self.current_level_frame_limit():
+        if not is_done and remaining_frames == 0:
             is_done = True
             truncated = True
 
         return GoalProgressResult(
             is_done=is_done,
-            reward=observation.reward.item(),
+            reward=self.get_reward(observation),
             log={
-                "total_energy_expenditure": observation.total_energy_expenditure.item(),
                 "success": 1 if self.is_all_food_eaten else 0,
                 "score": self.score,
+                "remaining_frames": remaining_frames,
+                "frame_id": observation.frame_id.item(),
                 "difficulty": self.world_params.difficulty,
                 "task": self.world_params.task.value,
-                "video_id": observation.video_id.item(),
+                "episode_id": observation.episode_id.item(),
                 "world_index": self.world_params.index,
+                "hit_points": observation.hit_points.item(),
                 "TimeLimit.truncated": truncated,
             },
+            world_path=self.world_params.output,
         )
 
-    def update_score(self, observation: AvalonObservationType):
-        if not self.is_all_food_eaten:
-            self.score = observation.hit_points.item()
-        self.is_all_food_eaten = observation.is_food_present_in_world.item() < 0.1
-        if observation.is_dead.item():
-            self.score = observation.hit_points.item()
+    def get_reward(self, observation: AvalonObservationType) -> float:
+        return observation.reward.item() - self.score_cost_per_frame
 
-    def current_level_frame_limit(self) -> int:
-        if self.world_params.task in (AvalonTask.SURVIVE, AvalonTask.FIND, AvalonTask.GATHER, AvalonTask.NAVIGATE):
+    def get_level_frame_limit(self, world_params: GenerateWorldParams) -> int:
+        if world_params.task in (AvalonTask.FIND, AvalonTask.GATHER, AvalonTask.NAVIGATE):
             return 15 * FRAMES_PER_MINUTE
-        elif self.world_params.task in (AvalonTask.STACK, AvalonTask.CARRY, AvalonTask.EXPLORE):
+        elif world_params.task in (AvalonTask.SURVIVE, AvalonTask.STACK, AvalonTask.CARRY, AvalonTask.EXPLORE):
             return 10 * FRAMES_PER_MINUTE
         else:
             return 5 * FRAMES_PER_MINUTE
 
     def reset(self, observation: AvalonObservationType, world_params: Optional[GenerateWorldParams] = None) -> None:
         self.world_params = world_params
-        self.score = observation.hit_points.item()
-        self.is_all_food_eaten = observation.is_food_present_in_world.item() < 0.1
+        self.initial_hit_points = observation.hit_points.item()
+        self.frame_limit = self.get_level_frame_limit(world_params)
+        self.score = self.frame_limit * self.score_cost_per_frame
+        self.is_all_food_eaten = observation.is_food_present_in_world.item() < 0.5
 
 
-class AvalonScoreEvaluator(GodotGoalEvaluator):
-    def update_score(self, observation: AvalonObservationType):
-        if not self.is_all_food_eaten:
-            self.score += observation.reward.item()
-            # we replace energy cost with a 1/3000 per frame cost
-            # self.score += observation.total_energy_expenditure.item()
-            self.score -= 1 / 3000.0
-        self.is_all_food_eaten = observation.is_food_present_in_world.item() < 0.1
-        if observation.is_dead.item() or self.score < 0:
-            self.score = 0
+# These are calculated such that 98% of humans succeed after applying the dynamic frame limit
+TRAINING_FRAME_LIMITS_AT_ZERO_DIFFICULTY = {
+    AvalonTask.EAT: 260,
+    AvalonTask.FIGHT: 220,
+    AvalonTask.PUSH: 700,
+    AvalonTask.DESCEND: 340,
+    AvalonTask.STACK: 710,
+    AvalonTask.CLIMB: 250,
+    AvalonTask.SCRAMBLE: 190,
+    AvalonTask.THROW: 600,
+    AvalonTask.GATHER: 3300,
+    AvalonTask.CARRY: 610,
+    AvalonTask.HUNT: 420,
+    AvalonTask.FIND: 1180,
+    AvalonTask.EXPLORE: 1340,
+    AvalonTask.MOVE: 360,
+    AvalonTask.BRIDGE: 630,
+    AvalonTask.SURVIVE: 3780,
+    AvalonTask.OPEN: 170,
+    AvalonTask.NAVIGATE: 1220,
+    AvalonTask.AVOID: 240,
+    AvalonTask.JUMP: 310,
+}
 
 
 @attr.s(auto_attribs=True, collect_by_mro=True)
-class DynamicFrameLimitGodotGoalEvaluator(GodotGoalEvaluator):
-    max_frames: int = 120
-    difficulty_time_bonus_factor: float = 1
+class TrainingGodotGoalEvaluator(GodotGoalEvaluator):
+    energy_cost_coefficient: float = 1e-9
+    body_ke_coefficient: float = 0.0
+    body_pe_coefficient: float = 1.0
+    head_pe_coefficient: float = 1.0
+    hand_ke_coefficient: float = 0.0
+    hand_pe_coefficient: float = 1.0
+    head_roll_coefficient: float = 0.0
+    head_pitch_coefficient: float = 0.0
+    energy_cost_aggregator: Literal["sum", "max"] = "sum"
 
-    def current_level_frame_limit(self) -> int:
-        return int(self.max_frames * (10 ** (self.difficulty_time_bonus_factor * self.world_params.difficulty)))
+    def get_level_frame_limit(self, world_params: GenerateWorldParams) -> int:
+        super_frame_limit = super().get_level_frame_limit(world_params)
+        dynamic_frame_limit = int(
+            TRAINING_FRAME_LIMITS_AT_ZERO_DIFFICULTY[world_params.task] * 10 ** world_params.difficulty
+        )
+        return min(super_frame_limit, dynamic_frame_limit)
+
+    def get_reward(self, observation: AvalonObservationType) -> float:
+        energy_cost = (
+            self.energy_cost_coefficient
+            * (
+                self.head_pe_coefficient * observation.physical_head_potential_energy_expenditure.item()
+                + self.body_ke_coefficient * observation.physical_body_kinetic_energy_expenditure.item()
+                + self.body_pe_coefficient * observation.physical_body_potential_energy_expenditure.item()
+                + self.hand_ke_coefficient * observation.physical_left_hand_kinetic_energy_expenditure.item()
+                + self.hand_pe_coefficient * observation.physical_left_hand_potential_energy_expenditure.item()
+                + self.hand_ke_coefficient * observation.physical_right_hand_kinetic_energy_expenditure.item()
+                + self.hand_pe_coefficient * observation.physical_right_hand_potential_energy_expenditure.item()
+            )
+            + self.head_roll_coefficient * observation.physical_head_rotation[2].item()
+            + self.head_pitch_coefficient * max(abs(observation.physical_head_rotation[0].item()) - 45.0, 0.0)
+        )
+        if self.energy_cost_aggregator == "sum":
+            energy_cost += self.score_cost_per_frame
+        elif self.energy_cost_aggregator == "max":
+            energy_cost = max(self.score_cost_per_frame, energy_cost)
+        else:
+            raise SwitchError(f"Invalid energy_cost_aggregator: {self.energy_cost_aggregator}")
+        return observation.reward.item() - energy_cost
+
+
+@attr.s(auto_attribs=True, hash=True, collect_by_mro=True, slots=True)
+class DebugCameraAction(AttrsAction):
+    offset: Vector3 = Vector3(0, 0, 0)
+    rotation: Vector3 = Vector3(0, 0, 0)
+    is_physics_paused: bool = False
+    is_facing_tracked: bool = False
+    tracking_node: str = "physical_head"
+
+    @classmethod
+    def isometric(
+        cls,
+        tracking_node: str = "physical_head",
+        distance: float = 12,
+        is_physics_paused: bool = False,
+        is_facing_tracked: bool = True,
+    ):
+        return DebugCameraAction(
+            Vector3(distance / 2, abs(distance), distance / 2),
+            Vector3(np.radians(-45), np.radians(45), 0),
+            is_physics_paused,
+            is_facing_tracked,
+            tracking_node,
+        )
+
+    @classmethod
+    def level(
+        cls,
+        tracking_node: str = "physical_head",
+        distance: float = 12,
+        is_physics_paused: bool = False,
+        is_facing_tracked: bool = True,
+    ):
+        return DebugCameraAction(
+            Vector3(distance / 2, 0, distance / 2),
+            Vector3(np.radians(-45), 0, 0),
+            is_physics_paused,
+            is_facing_tracked,
+            tracking_node,
+        )
+
+    def to_bytes(self) -> bytes:
+        action_bytes = b""
+        for vec in [self.offset, self.rotation]:
+            action_bytes += _to_bytes(float, vec.x)
+            action_bytes += _to_bytes(float, vec.y)
+            action_bytes += _to_bytes(float, vec.z)
+        action_bytes += _to_bytes(float, 1.0 if self.is_physics_paused else 0.0)
+        action_bytes += _to_bytes(float, 1.0 if self.is_facing_tracked else 0.0)
+        action_bytes += self.tracking_node.encode("UTF-8")
+        return _to_bytes(int, len(action_bytes)) + action_bytes
+
+    @classmethod
+    def _read_vec(cls, action_bytes: bytes) -> Tuple[Vector3, bytes]:
+        v = [0.0, 1.0, 2.0]
+        remaining = action_bytes
+        for axis in v:
+            v[axis], remaining = _from_bytes(float, action_bytes)
+        return Vector3(*v), remaining
+
+    @classmethod
+    def from_bytes(cls, action_bytes: bytes) -> "DebugCameraAction":
+        fields: Dict[str, Any] = {}
+        _size, remaining_bytes = _from_bytes(int, action_bytes)
+        offset, remaining_bytes = cls._read_vec(remaining_bytes)
+        rotation, remaining_bytes = cls._read_vec(remaining_bytes)
+        is_physics_paused, remaining_bytes = _from_bytes(float, remaining_bytes)
+        is_facing_tracked, remaining_bytes = _from_bytes(float, remaining_bytes)
+        tracking_node = remaining_bytes.decode("UTF-8")
+        return cls(offset, rotation, is_physics_paused != 0, is_facing_tracked != 0, tracking_node)

@@ -1,0 +1,215 @@
+{
+  "snapshot_commit": "25488fae5f8c2882340988a01f3a545cf91ed094",
+  "checksums": {
+    "apple_fall_on_ground": {
+      "scene": "0597efface8a5957da73443d51399aef",
+      "video": "6adad73f1d5b90231c1942e131e6a414",
+      "debug_output": "55b5c6da3e60e82878c131e8edea51e5"
+    },
+    "apple_fall_on_rock": {
+      "scene": "ff39033c6d2799af5cd4ff81680d7dcd",
+      "video": "6d8d06abce2968094bc6dfa913c24ef3",
+      "debug_output": "6a30464df8ff5c5c14007d4961bf0130"
+    },
+    "apple_hit_with_rock": {
+      "scene": "570e66c5de73b00273d0c6fc2e14d2ee",
+      "video": "d86f5469ec1de4f934c1fba871fd6616",
+      "debug_output": "39876a838757148aae5003acd37a41f1"
+    },
+    "banana_fall_on_ground": {
+      "scene": "062658dd3a2d2db0e965020f78759a1c",
+      "video": "c93a2938d876a3bdec01b40803a96017",
+      "debug_output": "b55389c891ec23c8b7e60ba2f051538f"
+    },
+    "banana_fall_on_rock": {
+      "scene": "7d62dfc448e6ea0b9136765bdb149e88",
+      "video": "2e747e3ddf75ecf0b41a1923bcbc0004",
+      "debug_output": "df918b018a7dcf42985ec65736abf92f"
+    },
+    "banana_hit_with_rock": {
+      "scene": "45ff0e0d7ed9c5fd049f862a68b1798e",
+      "video": "7b819f67a8c554b3db615aa6975e1464",
+      "debug_output": "f210b5883449d14e5627a03fbf46d824"
+    },
+    "cherry_fall_on_ground": {
+      "scene": "048ab0f213c2fbebbff1bc051ec5998d",
+      "video": "b5ad25aa50ecc9602cd6ade8e6bda657",
+      "debug_output": "b67a28d17aee5d72627edb3f9b9e4848"
+    },
+    "cherry_fall_on_rock": {
+      "scene": "b4f901ddaf4ff074a41216c7b663bcb8",
+      "video": "93a53abeef4da764cafa57f9d118579c",
+      "debug_output": "016bbc00ec263977f87180a8a9422484"
+    },
+    "cherry_hit_with_rock": {
+      "scene": "7b2b1bf46977d5a56b3a45d90571a5fc",
+      "video": "04abf3456464e9c256f917df05ed3c58",
+      "debug_output": "32aacf79410baf1a0e6c32c46d6c3ba6"
+    },
+    "honeycomb_fall_on_ground": {
+      "scene": "1908eb8fdd9226307d91cbc8064cb67e",
+      "video": "dbe5955812de09d32753e54b1cfd398b",
+      "debug_output": "0571ed741ab698b1a664abd9084d4353"
+    },
+    "honeycomb_fall_on_rock": {
+      "scene": "721b3cf5ead23c8c11cb4ca14643d1cf",
+      "video": "b1c99394fd5427f2f82c563a6a8fe764",
+      "debug_output": "a56112c13c98a64f397a194bfacfbe4d"
+    },
+    "honeycomb_hit_with_rock": {
+      "scene": "5fb3ce9796aa00916ccdf891183124db",
+      "video": "79ee5551db93bcac282f4acbe61277bd",
+      "debug_output": "5db68ec519344a78399087cc3b7be948"
+    },
+    "mulberry_fall_on_ground": {
+      "scene": "e1ca46f5fa4de3f528cf14cdc9567526",
+      "video": "a26a2f99f72ff3733298dccb40766142",
+      "debug_output": "edf3bcd1a17b5c7da93e2f444d0d0602"
+    },
+    "mulberry_fall_on_rock": {
+      "scene": "0b5b21a27c78cb6d0e63a01a909c9bb3",
+      "video": "3063ab5b908d70b1f31e8cc54ed1c3ae",
+      "debug_output": "884fa478ba5e4e2a6acc5d2dc2e34309"
+    },
+    "mulberry_hit_with_rock": {
+      "scene": "c5c90319a09e058880a9d0765f760e3a",
+      "video": "70efcac5106cc8151222c28ede39b479",
+      "debug_output": "7fd17684973404e110d2357545603030"
+    },
+    "fig_fall_on_ground": {
+      "scene": "6f79d40115d4dd0161c23400a79756cb",
+      "video": "3754564569106b58057e2c8c64b7e857",
+      "debug_output": "6bc5fc11473ec1873f812695fa0ca3fa"
+    },
+    "fig_fall_on_rock": {
+      "scene": "500a3a597d3d8f00e7e1c0172dbf4d3c",
+      "video": "5d279d01465a527370bbc3126cd171d1",
+      "debug_output": "8267ed767027528b1b0f6d0e63a437dc"
+    },
+    "fig_hit_with_rock": {
+      "scene": "c25842dab7537b4f2232f89eb620f7e3",
+      "video": "023f5e73105405ac71357828278122ad",
+      "debug_output": "6a07d062e197d5cd66765a37e8b747fa"
+    },
+    "orange_fall_on_ground": {
+      "scene": "8f44033df858f2457cd70511edc7bc3a",
+      "video": "2fb25d82f3fc7551e418157a2c1a1f71",
+      "debug_output": "17a96104ef08f0b214f1e1560c571050"
+    },
+    "orange_fall_on_rock": {
+      "scene": "19324af6f4ac85ae78709860778fa6f7",
+      "video": "6cf0a2c26378b29ec4996707c58174d3",
+      "debug_output": "f72543d92d255c0c89b18fc97ac6c180"
+    },
+    "orange_hit_with_rock": {
+      "scene": "44af914fde711057ee8a3a01243b92e3",
+      "video": "3e344914bd911de557d594335053a2bf",
+      "debug_output": "638504e6378e3bf0e143ec851bac68f2"
+    },
+    "avocado_fall_on_ground": {
+      "scene": "458a2d7c760e69997a75f167f1d2abb8",
+      "video": "7ece092fad7bd59af97c9c4cda69c126",
+      "debug_output": "858aa286c51a0fddb61b07d00f13e7cf"
+    },
+    "avocado_fall_on_rock": {
+      "scene": "2d969da451c5660ac190aa7790075375",
+      "video": "f699dc2edc1597b89cb8d82fc7d0d899",
+      "debug_output": "5511381bbc3e5d32ecbf9b7ae5361e27"
+    },
+    "avocado_hit_with_rock": {
+      "scene": "b0592d280eeac68e419c60a85f451dd3",
+      "video": "709a90507cdddd93824c7e3baa59b583",
+      "debug_output": "69fe9c178a738b0e9298615c2ad399e4"
+    },
+    "coconut_fall_on_ground": {
+      "scene": "17b1a7a1f2a5d855a59e3057f2fd4b72",
+      "video": "ce2e4d2eaca92b6525b33c918b8c52ae",
+      "debug_output": "e0f25ebba5723942c93555ee48de55ec"
+    },
+    "coconut_fall_on_rock": {
+      "scene": "6fe9b35e8d8c9e644fb1ca1f25dbfaea",
+      "video": "10d643a5e8832217c95812c17a926dbe",
+      "debug_output": "5b88287de6fb495f7fd3c615170891a3"
+    },
+    "coconut_hit_with_rock": {
+      "scene": "814f2d570730d9686c88a0255d95775c",
+      "video": "6e18c5cf6c24e02222bb75c7535665af",
+      "debug_output": "06e27aecaf165a790c0cb2108d2253cf"
+    },
+    "avocado_fall_on_altar": {
+      "scene": "2aa09b983fa21e53e5b11855c9ef1b47",
+      "video": "c4e22fb92d73c92c85e723f62395432d",
+      "debug_output": "8e0efebb4f5e1a7f53247f90a4feab6a"
+    },
+    "apple_grounded": {
+      "scene": "a70f9a08b0bb61b7711cb78f6ef20800",
+      "video": "05dbb486b84104db3fcd8024ccb28adb",
+      "debug_output": "21488150df92564f3b332364eb4c08a9"
+    },
+    "banana_grounded": {
+      "scene": "41d395a7e4bad97ae7625a622b51d38b",
+      "video": "d2e2aa4da987d20e1d9da7700c1a2bd3",
+      "debug_output": "c100769017faa1b1baf8fe73fd17ca91"
+    },
+    "cherry_grounded": {
+      "scene": "ef6f5fd10cb8445aff83bcf458d7e7cc",
+      "video": "8ef10c2b99b5f3af260a7a37e860edba",
+      "debug_output": "e4879e375c8b9820e222ca31f167542c"
+    },
+    "mulberry_grounded": {
+      "scene": "5ae583ffee0aeb08ac47fd71b3857811",
+      "video": "7593c7f89074da077da20a0d5f6fe2ac",
+      "debug_output": "392860a227dafbffacff482e7f4aac72"
+    },
+    "fig_grounded": {
+      "scene": "49f658ebbac2966f16a5e5a6e217be93",
+      "video": "a08d7e58652afad61de943a2f6532f7e",
+      "debug_output": "08c05a3c66e829676191755056280171"
+    },
+    "orange_grounded": {
+      "scene": "d1e64b8f56404e83916f4182ba0d92c7",
+      "video": "05206a1ce8590153e35d11f2bd94bc22",
+      "debug_output": "33047cc7580af02fdd5675078e9500b5"
+    },
+    "avocado_grounded": {
+      "scene": "8855d7540b65e60dc2db55ee6a30baf7",
+      "video": "f2cbf051b33d64c62c4ef8e712424246",
+      "debug_output": "1364e7478facb75dc772902150469135"
+    },
+    "coconut_grounded": {
+      "scene": "433551f2fde2be4399c4aeed0c09b2a8",
+      "video": "95678f0ae5cc4cb988c3f2acc5863a56",
+      "debug_output": "84c3f0e24531921e7ebdf60e38631471"
+    },
+    "carrot_grounded": {
+      "scene": "cc6ca08aefde0cfb49377dada358dd88",
+      "video": "57c3b0cf5111fc4ff9065c19b3a02c54",
+      "debug_output": "8ad05350b7d4a3593f65eb4014988b05"
+    },
+    "fig_goes_splat": {
+      "scene": "49f658ebbac2966f16a5e5a6e217be93",
+      "video": "ff3a4b913b6dc31836cd3e97ca932905",
+      "debug_output": "d20f0c708b833cb25b4c039bbb35a6a8"
+    },
+    "banana_on_tree": {
+      "scene": "597073e9e32a046f3fbc2391a23a077f",
+      "video": "df9112371b34abacbbaf2717818efc0c",
+      "debug_output": "58b3747e84a819b9dc9f8f0643ef8762"
+    },
+    "mulberry_on_tree": {
+      "scene": "8b95a4df087cd75b3c2db82be60f9682",
+      "video": "62c7181ce7e78212ebb35e938465e39d",
+      "debug_output": "f49aca43f0bee3a51f5817899623ec8d"
+    },
+    "honeycomb_on_tree": {
+      "scene": "c38d13c75d62df12e412a1f2df4dd6f2",
+      "video": "a57cafa7edadefb7f736f26d356dd846",
+      "debug_output": "7c49da66dfea4f7292c2ae0c853b8eea"
+    },
+    "honeycomb_gets_dirty": {
+      "scene": "c38d13c75d62df12e412a1f2df4dd6f2",
+      "video": "468ccf23113a0003a6671a3eefc22061",
+      "debug_output": "4e102e08443744247d664b8b17e0cce7"
+    }
+  }
+}

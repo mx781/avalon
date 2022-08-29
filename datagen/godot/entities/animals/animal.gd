@@ -8,9 +8,6 @@ const NEVER = "NEVER"
 const DEAD = "DEAD"
 const ALWAYS = "ALWAYS"
 
-const DAMAGE_INVINCIBILITY_FRAMES = 10
-const INVINCIBILITY_INDICATOR_FRAMES = 5
-
 const INVINCIBLE_HP = 100
 
 # re-export
@@ -34,6 +31,9 @@ export var fall_damage_velocity_threshold := 40.0
 export var freeze_at_distance_from_player := 50
 export var player_detection_radius := 12.0
 
+export var damage_invincibility_frames := 10
+export var invincibility_indicator_frames := 5
+
 var is_player_in_detection_radius := false
 
 var invincibility_frame := 0
@@ -41,7 +41,7 @@ var invincibility_frame := 0
 var controller: MovementController
 var _collision_shape: CollisionShape
 
-var _player: Node
+var _player: Player
 
 var inactive_behavior
 var active_behavior
@@ -51,10 +51,11 @@ var avoid_ocean_behavior
 
 var is_frozen: bool = false
 
-var possible_impediments := []
+var possible_impediments: Array
 
 
 func _ready():
+	possible_impediments = []
 	controller = $movement_controller
 	_collision_shape = $collision_shape
 	add_collision_exception_with(controller)
@@ -84,7 +85,7 @@ func _switch_behavior(behavior):
 	if HARD.mode():
 		var previous = previous_behavior.get_name() if previous_behavior else ""
 		var new = behavior.get_name()
-		print("behavior change in %s: %s -> %s" % [name, previous, new])
+		print("%s behavior changed: %s -> %s" % [self, previous, new])
 	if previous_behavior != null:
 		previous_behavior.reset()
 	previous_behavior = behavior
@@ -100,12 +101,21 @@ func maybe_freeze(player_distance: float) -> bool:
 	elif is_alive():
 		controller.get_floor_ray().enabled = true
 
+	is_frozen = should_freeze
+
+	if HARD.mode():
+		var change = "freezing" if should_freeze else "unfreezing"
+		print("%s is %s (player_distance %s)" % [self, change, player_distance])
+
 	return should_freeze
 
 
 func _physics_process(delta):
 	var player_distance = distance_to_player(is_flying())
-	is_player_in_detection_radius = player_distance <= player_detection_radius
+	is_player_in_detection_radius = (
+		player_distance <= player_detection_radius
+		or _is_still_climbing_up_away_from_player()
+	)
 	if is_behaving_like_item or maybe_freeze(player_distance):
 		return
 
@@ -146,8 +156,8 @@ func _integrate_forces(state):
 
 func get_player_position() -> Vector3:
 	if _player == null:
-		_player = get_node("/root/Globals").player.physical_body
-	return _player.global_transform.origin
+		_player = get_tree().root.find_node("player", true, false)
+	return _player.physical_body.global_transform.origin
 
 
 func distance_to_player(is_in_2d: bool = false) -> float:
@@ -253,7 +263,7 @@ func possibly_change_to_sidestep(default_dir: Vector3) -> Vector3:
 
 	if HARD.mode():
 		var l_or_r = "left" if is_left_faster else "right"
-		print("%s sidestepping %s to the %s" % [name, impediment, l_or_r])
+		print("%s sidestepping %s to the %s" % [self, impediment, l_or_r])
 
 	return sidestep_dir
 
@@ -316,9 +326,9 @@ func handle_damage_debounce():
 	if invincibility_frame == 0:
 		return
 
-	invincibility_frame = (invincibility_frame + 1) % DAMAGE_INVINCIBILITY_FRAMES
+	invincibility_frame = (invincibility_frame + 1) % damage_invincibility_frames
 
-	if $dead_mesh.visible and invincibility_frame >= INVINCIBILITY_INDICATOR_FRAMES:
+	if $dead_mesh.visible and invincibility_frame >= invincibility_indicator_frames:
 		hide_pain_or_dead()
 
 
@@ -341,9 +351,9 @@ func on_body_entered(body: Node):
 	if not is_alive():
 		return
 
-	if "tree" in body.name:
+	if Tools.is_tree(body):
 		if HARD.mode():
-			print("%s has possible impediment %s" % [name, body])
+			print("%s has possible impediment %s" % [self, body])
 		possible_impediments.append(body)
 
 	if hit_points >= INVINCIBLE_HP:
@@ -408,14 +418,7 @@ func on_body_exited(body: Node):
 			return
 		possible_impediments.remove(idx)
 		if HARD.mode():
-			print("%s impediment %s removed" % [name, body])
-
-
-func get_detection_radius() -> float:
-	var zone_collision_shape: CollisionShape = $player_detection_zone/collision_shape
-	var shape = zone_collision_shape.shape
-	HARD.assert(shape is SphereShape or shape is CylinderShape)
-	return shape.radius
+			print("%s impediment %s removed" % [self, body])
 
 
 func _apply_ground_tilt(target_transform: Transform) -> Transform:
@@ -446,6 +449,13 @@ func face_away(position: Vector3, weight: float, force_apply_tilt: bool = false)
 
 
 func face(direction: int, position: Vector3, turn_weight: float) -> float:
+	# If x and z position are the same, we cannot turn to face the position
+	# TODO: prevent spawn point from being in/on items
+	if (
+		is_equal_approx(position.x, transform.origin.x)
+		and is_equal_approx(position.z, transform.origin.z)
+	):
+		return 0.0
 	match direction:
 		TOWARDS_PLAYER, TOWARDS_TERRITORY:
 			return face_towards(position, turn_weight)
@@ -478,6 +488,19 @@ func get_ongoing_movement() -> Vector3:
 	return Vector3.ZERO
 
 
+func _is_still_climbing_up_away_from_player() -> bool:
+	if not is_climbing():
+		return false
+
+	var player_pos = get_player_position()
+	var animal_pos = global_transform.origin
+	var two_d_distance = Vector2(animal_pos.x, animal_pos.z).distance_to(
+		Vector2(player_pos.x, player_pos.z)
+	)
+	var should_keep_climbing_to_prevent_stutter = two_d_distance <= player_detection_radius
+	return should_keep_climbing_to_prevent_stutter
+
+
 func is_grounded() -> bool:
 	return controller.current_domain == GROUND
 
@@ -498,10 +521,6 @@ func is_avoiding_ocean() -> bool:
 	return controller.is_heading_towards_ocean() or avoid_ocean_behavior.is_already_avoiding()
 
 
-func is_close_to_bottom_of_climb() -> bool:
-	return is_climbing() and controller.get_floor_ray().is_colliding()
-
-
 func is_mid_hop():
 	return is_grounded() and (not controller.is_on_floor()) and is_moving()
 
@@ -512,3 +531,16 @@ func is_moving():
 
 func _rng_key(behavior_name: String) -> String:
 	return "%s/%s" % [get_path(), behavior_name]
+
+
+func to_dict() -> Dictionary:
+	var data = .to_dict()
+	data["is_frozen"] = is_frozen
+	data["is_mobile"] = mode == MODE_KINEMATIC
+	data["is_alive"] = is_alive()
+	data["current_domain"] = controller.current_domain
+	data["hit_points"] = hit_points
+	data["behavior"] = previous_behavior.get_name() if previous_behavior else null
+	var impediment = get_first_forwad_impediment()
+	data["forward_impediment"] = impediment.name if impediment else null
+	return data

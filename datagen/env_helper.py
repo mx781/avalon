@@ -1,17 +1,22 @@
-import os
+from pathlib import Path
+from typing import Iterable
 from typing import List
 from typing import Optional
+from typing import Tuple
 from typing import Type
+from typing import Union
 
 import attr
+import numpy as np
+import numpy.typing as npt
 import torch
 from einops import rearrange
 
+from agent.godot.godot_gym import create_base_benchmark_config
 from common.errors import SwitchError
-from common.utils import DATA_FOLDER
 from common.visual_utils import visualize_tensor_as_video
-from datagen.godot_base_types import Vector3
 from datagen.godot_env import AttrsAction
+from datagen.godot_env import AttrsObservation
 from datagen.godot_env import AvalonObservationType
 from datagen.godot_env import GoalEvaluator
 from datagen.godot_env import GoalProgressResult
@@ -22,73 +27,9 @@ from datagen.godot_generated_types import AgentPlayerSpec
 from datagen.godot_generated_types import AvalonSimSpec
 from datagen.godot_generated_types import MouseKeyboardAgentPlayerSpec
 from datagen.godot_generated_types import MouseKeyboardHumanPlayerSpec
-from datagen.godot_generated_types import RecordingOptionsSpec
 from datagen.godot_generated_types import VRAgentPlayerSpec
 from datagen.godot_generated_types import VRHumanPlayerSpec
 from datagen.world_creation.world_generator import GenerateWorldParams
-
-
-def create_base_benchmark_config() -> AvalonSimSpec:
-    return AvalonSimSpec(
-        dataset_id=0,
-        label=0,
-        video_min=0,
-        video_max=750,
-        frame_max=100,
-        random_int=0,
-        random_key="{dir_root}",
-        dir_root=os.path.join(DATA_FOLDER, "interactive"),
-        output_file_name_format="{dir_root}/{video_id}/{feature}__{type_and_dim}.raw",
-        scene_path="res://scenes/empty.tscn",
-        is_using_shared_caches=False,
-        is_generating_paired_videos=False,
-        player=AgentPlayerSpec(
-            max_head_linear_speed=0.3,
-            max_head_angular_speed=Vector3(5.0, 10.0, 1.0),
-            max_hand_linear_speed=1.0,
-            max_hand_angular_speed=15.0,
-            jump_height=1.5,
-            arm_length=1.5,
-            starting_hit_points=100.0,
-            mass=1.0,
-            arm_mass_ratio=0.05,
-            head_mass_ratio=0.08,
-            standup_speed_after_climbing=0.1,
-            min_head_position_off_of_floor=0.2,
-            push_force_magnitude=5.0,
-            throw_force_magnitude=3.0,
-            starting_left_hand_position_relative_to_head=Vector3(-0.5, -0.5, -0.5),
-            starting_right_hand_position_relative_to_head=Vector3(0.5, -0.5, -0.5),
-            minimum_fall_speed=10.0,
-            fall_damage_coefficient=0.0,
-            total_energy_coefficient=0.0,
-            body_kinetic_energy_coefficient=0.0,
-            body_potential_energy_coefficient=0.0,
-            head_potential_energy_coefficient=0.0,
-            left_hand_kinetic_energy_coefficient=0.0,
-            left_hand_potential_energy_coefficient=0.0,
-            right_hand_kinetic_energy_coefficient=0.0,
-            right_hand_potential_energy_coefficient=0.0,
-            num_frames_alive_after_food_is_gone=50,
-            eat_area_radius=0.5,
-            is_displaying_debug_meshes=False,
-        ),
-        recording_options=RecordingOptionsSpec(
-            user_id=None,
-            apk_version=None,
-            recorder_host=None,
-            recorder_port=None,
-            is_teleporter_enabled=False,
-            resolution_x=64,
-            resolution_y=64,
-            is_recording_rgb=True,
-            is_recording_depth=False,
-            is_recording_human_actions=False,
-            is_remote_recording_enabled=False,
-            is_adding_debugging_views=False,
-            is_debugging_output_requested=False,
-        ),
-    )
 
 
 def create_mouse_keyboard_benchmark_config() -> AvalonSimSpec:
@@ -147,10 +88,14 @@ def get_null_vr_action() -> AttrsAction:
     )
 
 
-def create_env(config: AvalonSimSpec, action_type: Type[AttrsAction]) -> GodotEnv:
+def create_env(
+    config: AvalonSimSpec,
+    action_type: Type[AttrsAction],
+    observation_type: Type[AttrsObservation] = AvalonObservationType,
+) -> GodotEnv:
     return GodotEnv(
         config=config,
-        observation_type=AvalonObservationType,
+        observation_type=observation_type,
         action_type=action_type,
         goal_evaluator=NullGoalEvaluator(),
         gpu_id=0,
@@ -175,20 +120,39 @@ class PlaybackGoalEvaluator(GoalEvaluator[AvalonObservationType]):
         pass
 
 
-def display_video(data: List[AvalonObservationType], size=None):
-    if size is None:
-        size = (512, 512)
-    tensor = torch.stack(
+def rgbd_to_video_tensor(rgbd_data: Iterable[npt.NDArray]) -> torch.Tensor:
+    return torch.stack(
         [
             rearrange(
-                torch.flipud(torch.tensor(x.rgbd[:, :, :3])),
+                torch.flipud(torch.tensor(rgbd[:, :, :3])),
                 "h w c -> c h w",
             )
             / 255.0
-            for x in data
+            for rgbd in rgbd_data
         ]
     )
+
+
+def observation_video_tensor(data: List[AvalonObservationType]) -> torch.Tensor:
+    return rgbd_to_video_tensor(x.rgbd for x in data)
+
+
+def observation_video(data: Union[List[AvalonObservationType], np.ndarray]) -> torch.Tensor:
+    stack = [x.rgb for x in data] if isinstance(data, list) else data
+    return torch.stack([rearrange(torch.tensor(x), "h w c -> c h w") / 255.0 for x in stack])
+
+
+def display_video(data: List[AvalonObservationType], size: Optional[Tuple[int, int]] = None) -> None:
+    if size is None:
+        size = (512, 512)
+    tensor = observation_video_tensor(data)
     visualize_tensor_as_video(tensor, normalize=False, size=size)
+
+
+def better_display_video(data: List[npt.NDArray[np.uint8]], size: Optional[Tuple[int, int]] = None) -> None:
+    if size is None:
+        size = (512, 512)
+    visualize_tensor_as_video(rgbd_to_video_tensor(data), normalize=False, size=size)
 
 
 def get_action_type_from_config(config: AvalonSimSpec) -> Type[AttrsAction]:
@@ -200,3 +164,43 @@ def get_action_type_from_config(config: AvalonSimSpec) -> Type[AttrsAction]:
         return VRActionType
     else:
         raise SwitchError(config.player)
+
+
+def visualize_worlds_in_folder(world_paths: Iterable[Path], resolution=1024, num_frames=20):
+    episode_seed = 0
+    config = create_vr_benchmark_config()
+
+    with config.mutable_clone() as config:
+        config.recording_options.resolution_x = resolution
+        config.recording_options.resolution_y = resolution
+    action_type = VRActionType
+    env = create_env(config, action_type)
+
+    all_observations = []
+    # if we want to take a few actions
+    # null_action = get_null_vr_action()
+    worlds_to_sort = []
+    for world_path in world_paths:
+        task, seed_str, difficulty_str = world_path.name.split("__")
+        difficulty = float(difficulty_str.replace("_", "."))
+        seed = int(seed_str)
+        worlds_to_sort.append((task, difficulty, seed, world_path))
+
+    for (task, difficulty, seed, world_path) in sorted(worlds_to_sort):
+        print(f"Loading {world_path}")
+        world_file = world_path / "main.tscn"
+        observations = []
+        observations.append(
+            env.reset_nicely_with_specific_world(
+                episode_seed=episode_seed,
+                world_path=str(world_file),
+            )
+        )
+        for i in range(num_frames):
+            null_action = get_null_vr_action()
+            obs, _ = env.act(null_action)
+            observations.append(obs)
+
+        all_observations.append(observations)
+
+    return all_observations

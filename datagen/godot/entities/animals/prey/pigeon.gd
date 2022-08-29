@@ -11,12 +11,10 @@ export var active_flee_full_speed := 2.75
 export var active_flee_turn_speed := 1.25
 export var active_flee_turn_rotation_speed := 1.5
 
-var in_detection_zone: PlayerWithinDetectionZone
 var return_to_territory: ReturnToTerritoryBehavior
 
 
 func _ready():
-	in_detection_zone = PlayerWithinDetectionZone.new()
 	return_to_territory = ReturnToTerritoryBehavior.new(
 		FlyInDirection.new(TOWARDS_TERRITORY, inactive_speed),
 		global_transform.origin,
@@ -41,7 +39,7 @@ func _ready():
 
 
 func select_next_behavior() -> AnimalBehavior:
-	if in_detection_zone.is_matched_by(self):
+	if is_player_in_detection_radius:
 		return active_behavior
 	if return_to_territory.is_returning_to_territory(self):
 		return return_to_territory

@@ -10,7 +10,7 @@ func is_matched_by(_animal: Animal) -> bool:
 
 static func all_match(animal: Animal, criteria: Array) -> bool:
 	for c in criteria:
-		var is_matched = (c as BehaviorCriteria).is_matched_by(animal)
+		var is_matched = c.is_matched_by(animal)
 		if not is_matched:
 			return false
 	return true

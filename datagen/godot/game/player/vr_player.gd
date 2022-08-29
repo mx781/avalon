@@ -2,8 +2,6 @@ extends Player
 
 class_name VRPlayer
 
-var extra_height_margin := 0.2
-
 
 func rotate_head(action: AvalonAction, _delta: float):
 	var quat = (
@@ -25,6 +23,7 @@ func move_while_climbing(
 	#	how much your body moved
 	var total_climb_movement = Vector3.ZERO
 
+	# TODO this let's you move twice as fast if you move in the same direction with both hands
 	if target_left_hand.is_grasping_heavy_thing():
 		total_climb_movement -= target_head.global_transform.basis * left_hand_delta_position
 	if target_right_hand.is_grasping_heavy_thing():

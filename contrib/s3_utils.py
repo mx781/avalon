@@ -4,15 +4,12 @@ from typing import Optional
 from typing import cast
 
 import boto3
-from botocore import UNSIGNED
 from botocore.exceptions import ClientError
-from botocore.config import Config
 
-from common.log_utils import logger
 from contrib.aws_auth import load_aws_keys
 
 REGION = "us-west-2"
-TEMP_BUCKET_NAME = "avalon-benchmark"
+TEMP_BUCKET_NAME = "untitled-ai-temp"
 
 
 class SimpleS3Client:
@@ -25,19 +22,12 @@ class SimpleS3Client:
             access_key, secret_key = os.environ["AWS_ACCESS_KEY_ID"], os.environ["AWS_SECRET_ACCESS_KEY"]
         else:
             access_key, secret_key = load_aws_keys()
-
-        config = None
-        if access_key is None or secret_key is None:
-            logger.warning("WARNING: no `access_key` or `secret_key` found for AWS, can only access public resources.")
-            config = Config(signature_version=UNSIGNED)
-
         # Create a new session to make client creation thread-safe.
         self.client = boto3.session.Session().client(
             "s3",
             region_name=region,
             aws_access_key_id=access_key,
             aws_secret_access_key=secret_key,
-            config=config,
         )
 
     def save(self, key: str, data: bytes):

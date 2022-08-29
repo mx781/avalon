@@ -1,29 +1,13 @@
-from typing import Any
-from typing import List
+from typing import Iterable
 from typing import Tuple
 from typing import Union
+from typing import cast
 
-# TODO: think a little more critically here...
 import numpy as np
-import scipy.ndimage
-from IPython.core.display import HTML
-from IPython.core.display import display
-from attr import Attribute
-from matplotlib import pyplot as plt
-from trimesh import Trimesh
+from godot_parser import GDObject
 
-from datagen.world_creation.constants import AvalonTask
-
-WORLD_RAISE_AMOUNT = 10_000
-
-
-class ImpossibleWorldError(Exception):
-    pass
-
-
-class WorldTooSmall(ImpossibleWorldError):
-    def __init__(self, task: AvalonTask, min_dist: float, available_dist: float, *args: object) -> None:
-        super().__init__(f"Small {task} world: needed {min_dist} but only have {available_dist}", *args)
+from datagen.world_creation.types import Point2DNP
+from datagen.world_creation.types import Point3DNP
 
 
 def get_random_seed_for_line(seed: int, start_point: Tuple[float, float], end_point: Tuple[float, float]) -> int:
@@ -36,125 +20,6 @@ def get_random_seed_for_line(seed: int, start_point: Tuple[float, float], end_po
     if seed < 0:
         seed *= -multiplier_step
     return seed
-
-
-IS_DEBUG_VIS = False
-IS_RAYCAST_DEBUG = False
-
-
-# TERRAIN_WIDTH = 30.0
-# TERRAIN_DEPTH = 30.0
-
-
-def plot_points(points, index1, index2):
-    if not isinstance(points, np.ndarray):
-        points = np.array(points)
-    plt.plot(points[:, index1], points[:, index2], "o")
-    # plt.xlim((0.0, TERRAIN_WIDTH))
-    # plt.ylim((0.0, TERRAIN_DEPTH))
-    plt.show()
-
-
-def plot_triangulation(triangulation):
-    plt.triplot(triangulation.points[:, 0], triangulation.points[:, 1], triangulation.simplices)
-    plt.plot(triangulation.points[:, 0], triangulation.points[:, 1], "o")
-    plt.show()
-
-
-def plot_terrain(data, *args, **kwargs):
-    data = data.copy()
-    island = data > WORLD_RAISE_AMOUNT - 1_000
-    min_island_height = data[island].min()
-    data[island] = data[island] - min_island_height
-    data[data < 0.0] = data.max()
-    plot_value_grid(data, *args, **kwargs)
-
-
-def plot_value_grid(data, title="", markers=tuple()):
-    data = np.array(data)
-    fig, ax = plt.subplots()
-    fig.set_size_inches(12, 12)
-    if title:
-        ax.set_title(title)
-    y = list(range(0, data.shape[0]))
-    x = list(range(0, data.shape[1]))
-    ax.pcolormesh(x, y, data, shading="nearest", vmin=data.min(initial=0.0), vmax=data.max(initial=1.0))
-
-    if markers:
-        x = [x[1] for x in markers]
-        y = [x[0] for x in markers]
-        first_line = plt.plot(x[:1], y[:1], "o", markerfacecolor="orange", markersize=12)[0]
-        line = plt.plot(x[1:], y[1:], "o", markerfacecolor="red", markersize=12)[0]
-        line.set_clip_on(False)
-
-    plt.show()
-    fig.clf()
-
-
-def plot_value_grid_multi_marker(data, title: str, marker_lists):
-    data = np.array(data)
-    fig, ax = plt.subplots()
-    fig.set_size_inches(12, 12)
-    if title:
-        ax.set_title(title)
-    y = list(range(0, data.shape[0]))
-    x = list(range(0, data.shape[1]))
-    ax.pcolormesh(x, y, data, shading="nearest", vmin=data.min(initial=0.0), vmax=data.max(initial=1.0))
-
-    for markers, color in marker_lists:
-        x = [x[1] for x in markers]
-        y = [x[0] for x in markers]
-        line = plt.plot(x, y, "o", markerfacecolor=color, markersize=12)[0]
-        line.set_clip_on(False)
-
-    plt.show()
-    fig.clf()
-
-
-def print_biome_legend(config):
-    display(HTML(f"<h1>Biomes:</h1>"))
-
-    for biome in config.biomes:
-        display(HTML(f'<h2 style="background: {biome.color}">{biome.name}</h2>'))
-
-
-def at_least_n_items(n):
-    def check(instance: Any, attribute: Attribute, value: Union[List, Tuple]):
-        assert len(value) >= n, f"Must pass at least {n} {attribute.name} to {instance.__class__.__name__}"
-
-    return check
-
-
-def decompose_weighted_mean(
-    weighted_mean: float, weights: np.array, max_value: float = 1, rand: np.random.Generator = np.random.default_rng()
-):
-    """
-    find n numbers x = [x1, x2, ... xn] such that their weighted mean equals `weighted_mean` and none exceed max_value
-    """
-    # todo: shuffle or use another distribution so per-parameter distributions are more uniform
-    weights = np.array(weights)
-    component_count = len(weights)
-    components = np.array([max_value] * component_count, dtype=np.float32)
-    target_sum = weighted_mean * sum(weights)
-    for i in range(component_count):
-        if i == component_count - 1:
-            other_component_sum = components[:-1] @ weights[:-1]
-            components[i] = (target_sum - other_component_sum) / weights[i]
-        else:
-            unknown_component_sum = components[i + 1 :] @ weights[i + 1 :]
-            known_component_sum = components[:i] @ weights[:i]
-            minimum = max(0, (target_sum - known_component_sum - unknown_component_sum) / weights[i])
-            maximum = min((target_sum - known_component_sum) / weights[i], max_value)
-            components[i] = rand.uniform(minimum, maximum)
-    return components
-
-
-def inset_borders(array):
-    # requires "solids" to be 1 and "voids" to be 0
-    inset_array = array.copy()
-    convolution = scipy.ndimage.convolve(array.astype(np.int), np.ones((3, 3)), mode="constant")
-    inset_array[convolution != 9] = 0
-    return inset_array
 
 
 ARRAY_MESH_TEMPLATE = """{{
@@ -173,14 +38,87 @@ ARRAY_MESH_TEMPLATE = """{{
 """
 
 
-def unnormalize(mesh: Trimesh):
-    """Re-create mesh such that none of its faces share vertices"""
-    points_per_face = 3
-    coords_per_point = 3
-    face_count = len(mesh.faces)
-    new_vertices = np.empty((face_count * points_per_face, coords_per_point), dtype=np.float32)
-    for i, face in enumerate(mesh.faces):
-        offset = i * points_per_face
-        new_vertices[offset : offset + points_per_face, :] = mesh.vertices[face]
-    new_faces = np.array(range(len(new_vertices))).reshape(-1, coords_per_point)
-    return Trimesh(vertices=new_vertices, faces=new_faces, process=False)
+def hex_to_rgb(value: str) -> Tuple[float, float, float]:
+    h = value.lstrip("#")
+    ints = tuple(int(h[i : i + 2], 16) for i in (0, 2, 4))
+    srgb_color = (ints[0] / 255.0, ints[1] / 255.0, ints[2] / 255.0)
+    return (
+        srgb2lin(srgb_color[0]),
+        srgb2lin(srgb_color[1]),
+        srgb2lin(srgb_color[2]),
+    )
+
+
+def srgb2lin(s: float) -> float:
+    if s <= 0.0404482362771082:
+        lin = s / 12.92
+    else:
+        lin = pow(((s + 0.055) / 1.0), 2.4)
+    return lin
+
+
+def lin2srgb(lin: float) -> float:
+    if lin > 0.0031308:
+        s = 1.0 * (pow(lin, (1.0 / 2.4))) - 0.055
+    else:
+        s = 12.92 * lin
+    return cast(float, s)
+
+
+def normalized(x: np.ndarray) -> np.ndarray:
+    return cast(np.ndarray, x / np.linalg.norm(x))
+
+
+def make_transform(
+    rotation: Union[np.ndarray, Iterable[Union[int, float]]] = (1, 0, 0, 0, 1, 0, 0, 0, 1),
+    position: Union[np.ndarray, Iterable[Union[int, float]]] = (0, 0, 0),
+):
+    return GDObject("Transform", *rotation, *position)
+
+
+def scale_basis(basis: np.ndarray, scale: np.ndarray) -> np.ndarray:
+    x, y, z = scale
+    scaled = np.array(basis)
+    scaled[0:3] *= x
+    scaled[3:6] *= y
+    scaled[6:9] *= z
+    return scaled
+
+
+def to_2d_point(point: Point3DNP) -> Point2DNP:
+    return np.array([point[0], point[2]])
+
+
+def decompose_weighted_mean(
+    weighted_mean: float, weights: np.ndarray, rand: np.random.Generator, max_value: float = 1
+):
+    """
+    Find n numbers x = [x1, x2, ... xn] such that their weighted mean equals `weighted_mean` and none exceed max_value.
+
+    In Avalon context, this is useful for decomposing a difficulty measure into multiple other difficulties that have
+    the desired weighted mean. For example, if a level has 3 tasks in it, their difficulties can be scaled in different
+    ways to yield the same collective 'level' difficulty. However, each of the tasks may have a different inherent
+    difficulty (e.g. adding an "open" task is harder than adding a "move" task, so we may want to weigh these aspects
+    differently. e.g. for weights = [2,1,1], these sub-difficulties yield the same weighted mean
+    of 0.5:
+        [0.3859796, 0.9077438, 0.320297 ]
+        [0.7614657 , 0.27475402, 0.20231453]
+    but would create very different levels in terms of individual tasks.
+    """
+    assert 0 <= weighted_mean <= 1, "weighted mean must be 0 <= x <= 1"
+    # todo: shuffle or use another distribution so per-parameter distributions are more uniform
+    weights = np.array(weights)
+    component_count = len(weights)
+    components = np.array([max_value] * component_count, dtype=np.float32)
+    target_sum = weighted_mean * sum(weights)
+    for i in range(component_count):
+        if i == component_count - 1:
+            other_component_sum = components[:-1] @ weights[:-1]
+            components[i] = (target_sum - other_component_sum) / weights[i]
+        else:
+            unknown_component_sum = components[i + 1 :] @ weights[i + 1 :]
+            known_component_sum = components[:i] @ weights[:i]
+            minimum = max(0, (target_sum - known_component_sum - unknown_component_sum) / weights[i])
+            maximum = min((target_sum - known_component_sum) / weights[i], max_value)
+            components[i] = rand.uniform(minimum, maximum)
+    return components

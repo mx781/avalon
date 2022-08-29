@@ -1,4 +1,3 @@
-# TODO this file is so verbose and so gross -- anyone have better ideas on how to clean this up?
 extends VRInputCollector
 
 class_name VRAgentInputCollector

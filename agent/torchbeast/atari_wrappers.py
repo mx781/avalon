@@ -24,6 +24,8 @@
 #   https://raw.githubusercontent.com/openai/baselines/7c520852d9cf4eaaad326a3d548efc915dc60c10/baselines/common/atari_wrappers.py
 # and slightly modified.
 
+# type: ignore
+
 from collections import deque
 
 import gym

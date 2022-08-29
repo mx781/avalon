@@ -16,12 +16,15 @@ import argparse
 import multiprocessing as mp
 import os.path
 import shutil
-import subprocess
+from uuid import uuid4
 
 import numpy as np
+import wandb
 
+from agent.godot.godot_gym import CURRICULUM_BASE_PATH
 from agent.torchbeast import polybeast_env
 from agent.torchbeast import polybeast_learner
+from agent.torchbeast.avalon_helpers import TORCHBEAST_ENV_LOGS_PATH
 from agent.torchbeast.avalon_helpers import _destroy_process_tree
 from common.log_utils import logger
 
@@ -32,7 +35,7 @@ def run_env(flags, actor_id, exit_event):
 
 
 def run_learner(flags):
-    polybeast_learner.main(flags)
+    return polybeast_learner.main(flags)
 
 
 def get_flags(check_argv_empty: bool = False):
@@ -49,10 +52,29 @@ def get_flags(check_argv_empty: bool = False):
     return flags
 
 
+def restore_curriculum_files():
+    api = wandb.Api()
+    run_api = api.run(wandb.run.path)
+    curriculum_filenames = [file.name for file in run_api.files() if file.name.startswith("curriculum")]
+    os.makedirs(CURRICULUM_BASE_PATH, exist_ok=True)
+    shutil.rmtree(CURRICULUM_BASE_PATH)
+    for filename in curriculum_filenames:
+        wandb.restore(filename, root=CURRICULUM_BASE_PATH.parent, replace=True)
+
+
 def main(flags):
     data_path = "/mnt/private/data/level_gen"
     os.makedirs(data_path, exist_ok=True)
     shutil.rmtree(data_path)
+    os.makedirs(TORCHBEAST_ENV_LOGS_PATH, exist_ok=True)
+    shutil.rmtree(TORCHBEAST_ENV_LOGS_PATH)
+
+    if not flags.xpid:
+        flags.xpid = str(uuid4())
+    name = os.environ.get("EXPERIMENT_NAME", flags.env)
+    wandb.init(config=flags, project=flags.project, name=name, id=flags.xpid, resume="allow")
+    restore_curriculum_files()
+
     env_processes = []
     exit_event = mp.Event()
     for actor_id in range(1):
@@ -60,7 +82,7 @@ def main(flags):
         p.start()
         env_processes.append(p)
 
-    test_data = run_learner(flags)
+    result = run_learner(flags)
 
     logger.info("Learner finished, killing processes")
     exit_event.set()
@@ -68,7 +90,7 @@ def main(flags):
     for p in env_processes:
         _destroy_process_tree(p.pid)
 
-    return test_data
+    return result
 
 
 if __name__ == "__main__":

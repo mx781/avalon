@@ -31,6 +31,12 @@ var _prev_origin: Vector3
 var is_held := false
 var is_hidden := false
 
+var previous_velocity := Vector3.ZERO
+
+
+func is_impossible_to_eat() -> bool:
+	return is_hidden
+
 
 func _ready():
 	HARD.assert(OK == connect("body_entered", self, "_on_body_entered"), "Failed to connect signal")
@@ -93,6 +99,8 @@ func _on_body_entered(body: Node):
 func _on_body_exited(body: Node):
 	if Tools.is_terrain(body):
 		ground_contact_count -= 1
+		if ground_contact_count < 0:
+			ground_contact_count = 0
 
 
 func _reset():
@@ -223,14 +231,16 @@ func handle_object_falling_through_floor() -> bool:
 
 
 func _physics_process(_delta):
+	# TODO bit awkward, but need a hook to bypass call_multilevel behavior for animals
+	if not is_behaving_like_item or is_hidden:
+		return
+
 	HARD.assert(
 		ground_contact_count >= 0,
 		"Ground contact is less than zero, this will break all the physics"
 	)
 
-	# TODO bit awkward, but need a hook to bypass call_multilevel behavior for animals
-	if not is_behaving_like_item or is_hidden:
-		return
+	previous_velocity = linear_velocity
 
 	# sometimes godot physics sucks and the object goes right through the floor
 	# if that happens we correct course manually
@@ -293,3 +303,35 @@ func _physics_process(_delta):
 	damping += ground_contact_frequency * ground_contact_damp_factor
 	linear_damp = default_linear_damp + damping * linear_damp_factor
 	angular_damp = default_angular_damp + damping * angular_damp_factor
+
+
+func get_recent_velocity_buffer() -> Array:
+	return [previous_velocity, linear_velocity]
+
+
+func _calculate_impact_magnitude(other) -> float:
+	if other is Vector3:
+		return _max_magnitude_difference(other)
+	elif other.has_method("get_recent_velocity_buffer"):
+		var impact_magnitude = 0.0
+		for v in other.get_recent_velocity_buffer():
+			var step_magnitude = _max_magnitude_difference(v)
+			if step_magnitude > impact_magnitude:
+				impact_magnitude = step_magnitude
+		return impact_magnitude
+	elif other is RigidBody:
+		return _max_magnitude_difference(other.linear_velocity)
+
+	HARD.assert(
+		other is Node, "_calculate_impact_magnitude should only be called with velocities or nodes"
+	)
+	return _max_magnitude_difference(Vector3.ZERO)
+
+
+func _max_magnitude_difference(other_velocity: Vector3) -> float:
+	var max_diff = 0.0
+	for v in get_recent_velocity_buffer():
+		var diff = (other_velocity - v).length()
+		if diff > max_diff:
+			max_diff = diff
+	return max_diff

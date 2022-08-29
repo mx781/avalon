@@ -1,3 +1,6 @@
+# Used by all animals to avoid hopping or flying into the ocean.
+# Takes priority over all other behaviors,
+# redirecting the animal back inland as best it can for the given movement_steps.
 extends CyclingBehavior
 
 class_name AvoidOcean
@@ -30,6 +33,9 @@ func _init(_rng_key: String, movement_steps: int, _speed, _turn_rotation_speed: 
 
 
 func do(animal, delta: float) -> Vector3:
+	if animal.is_climbing():
+		animal.stop_climbing()
+
 	if not is_already_avoiding():
 		turn_direction = left_or_right_dist.new_value(rng_key)
 		step_behavior_cycle_forward()

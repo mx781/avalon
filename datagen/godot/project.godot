@@ -24,6 +24,11 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://entities/animals/behaviors/criteria/activation_gate.gd"
 }, {
+"base": "GameManager",
+"class": "AgentGameManager",
+"language": "GDScript",
+"path": "res://game/game_manager/agent_game_manager.gd"
+}, {
 "base": "PlayerSpec",
 "class": "AgentPlayerSpec",
 "language": "GDScript",
@@ -53,11 +58,6 @@ _global_script_classes=[ {
 "class": "AvalonClient",
 "language": "GDScript",
 "path": "res://utils/avalon_client.gd"
-}, {
-"base": "Sim",
-"class": "AvalonSim",
-"language": "GDScript",
-"path": "res://game/entities/avalon_sim.gd"
 }, {
 "base": "SimSpec",
 "class": "AvalonSimSpec",
@@ -184,6 +184,26 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://entities/animals/behaviors/cycling_behavior.gd"
 }, {
+"base": "AvalonAction",
+"class": "DebugCameraAction",
+"language": "GDScript",
+"path": "res://game/action/debug_camera_action.gd"
+}, {
+"base": "InputCollector",
+"class": "DebugCameraInputCollector",
+"language": "GDScript",
+"path": "res://game/input_collector/debug_camera_input_collector.gd"
+}, {
+"base": "Viewport",
+"class": "DebugCameraView",
+"language": "GDScript",
+"path": "res://game/camera/debug_camera_view.gd"
+}, {
+"base": "Reference",
+"class": "DebugLogger",
+"language": "GDScript",
+"path": "res://game/utils/debug_logger.gd"
+}, {
 "base": "Animal",
 "class": "Deer",
 "language": "GDScript",
@@ -254,6 +274,11 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://entities/animals/prey/frog.gd"
 }, {
+"base": "Reference",
+"class": "GameManager",
+"language": "GDScript",
+"path": "res://game/game_manager/game_manager.gd"
+}, {
 "base": "BaseDistribution",
 "class": "GaussianDistribution",
 "language": "GDScript",
@@ -278,6 +303,11 @@ _global_script_classes=[ {
 "class": "Hawk",
 "language": "GDScript",
 "path": "res://entities/animals/predators/hawk.gd"
+}, {
+"base": "ProgressBar",
+"class": "HealthBar",
+"language": "GDScript",
+"path": "res://game/player/player_health_bar.gd"
 }, {
 "base": "Door",
 "class": "HingeDoor",
@@ -308,6 +338,11 @@ _global_script_classes=[ {
 "class": "HopRandomly",
 "language": "GDScript",
 "path": "res://entities/animals/behaviors/hop_randomly.gd"
+}, {
+"base": "GameManager",
+"class": "HumanGameManager",
+"language": "GDScript",
+"path": "res://game/game_manager/human_game_manager.gd"
 }, {
 "base": "PlayerSpec",
 "class": "HumanPlayerSpec",
@@ -414,11 +449,6 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://entities/animals/predators/natural_weapon.gd"
 }, {
-"base": "Node",
-"class": "NewTrackingCameraController",
-"language": "GDScript",
-"path": "res://game/camera/tracking_camera_controller.gd"
-}, {
 "base": "CollisionShape",
 "class": "NonGrabbable",
 "language": "GDScript",
@@ -433,6 +463,11 @@ _global_script_classes=[ {
 "class": "NoticesPlayerMoving",
 "language": "GDScript",
 "path": "res://entities/animals/behaviors/criteria/notices_player_moving.gd"
+}, {
+"base": "Reference",
+"class": "ObservationHandler",
+"language": "GDScript",
+"path": "res://game/utils/observation_handler.gd"
 }, {
 "base": "DynamicEntity",
 "class": "OpenButton",
@@ -459,6 +494,11 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://game/player/player_hand.gd"
 }, {
+"base": "BehaviorCriteria",
+"class": "PlayerInDetectionRadius",
+"language": "GDScript",
+"path": "res://entities/animals/behaviors/criteria/player_in_detection_radius.gd"
+}, {
 "base": "AbleToMakeHeadway",
 "class": "PlayerReachableByGround",
 "language": "GDScript",
@@ -468,11 +508,6 @@ _global_script_classes=[ {
 "class": "PlayerSpec",
 "language": "GDScript",
 "path": "res://game/specs/PlayerSpec.gd"
-}, {
-"base": "BehaviorCriteria",
-"class": "PlayerWithinDetectionZone",
-"language": "GDScript",
-"path": "res://entities/animals/behaviors/criteria/player_within_detection_zone.gd"
 }, {
 "base": "BehaviorCriteria",
 "class": "PlayerWithinThreshold",
@@ -543,11 +578,6 @@ _global_script_classes=[ {
 "class": "RotatingBar",
 "language": "GDScript",
 "path": "res://entities/doors/rotating_bar.gd"
-}, {
-"base": "Node",
-"class": "Sim",
-"language": "GDScript",
-"path": "res://game/entities/sim.gd"
 }, {
 "base": "SceneTree",
 "class": "SimLoop",
@@ -659,6 +689,11 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://game/camera/tracking_camera.gd"
 }, {
+"base": "Reference",
+"class": "TrackingCameraController",
+"language": "GDScript",
+"path": "res://game/camera/tracking_camera_controller.gd"
+}, {
 "base": "Animal",
 "class": "Turtle",
 "language": "GDScript",
@@ -743,13 +778,13 @@ _global_script_class_icons={
 "AbleToMakeHeadway": "",
 "Action": "",
 "ActivationGate": "",
+"AgentGameManager": "",
 "AgentPlayerSpec": "",
 "Alligator": "",
 "Animal": "",
 "AnimalBehavior": "",
 "AvalonAction": "",
 "AvalonClient": "",
-"AvalonSim": "",
 "AvalonSimSpec": "",
 "Avocado": "",
 "AvoidOcean": "",
@@ -775,6 +810,10 @@ _global_script_class_icons={
 "Crate": "",
 "Crow": "",
 "CyclingBehavior": "",
+"DebugCameraAction": "",
+"DebugCameraInputCollector": "",
+"DebugCameraView": "",
+"DebugLogger": "",
 "Deer": "",
 "Door": "",
 "DoorBody": "",
@@ -789,17 +828,20 @@ _global_script_class_icons={
 "FlyRandomly": "",
 "Food": "",
 "Frog": "",
+"GameManager": "",
 "GaussianDistribution": "",
 "Grabbable": "",
 "GymEnvBridge": "",
 "HARD": "",
 "Hawk": "",
+"HealthBar": "",
 "HingeDoor": "",
 "Hippo": "",
 "Honeycomb": "",
 "HopInCircle": "",
 "HopInDirection": "",
 "HopRandomly": "",
+"HumanGameManager": "",
 "HumanPlayerSpec": "",
 "InputCollector": "",
 "InteractionHandlers": "",
@@ -821,18 +863,18 @@ _global_script_class_icons={
 "MouseKeyboardPlayer": "",
 "MovementController": "",
 "NaturalWeapon": "",
-"NewTrackingCameraController": "",
 "NonGrabbable": "",
 "NoticedByPlayer": "",
 "NoticesPlayerMoving": "",
+"ObservationHandler": "",
 "OpenButton": "",
 "Orange": "",
 "Pigeon": "",
 "Player": "",
 "PlayerHand": "",
+"PlayerInDetectionRadius": "",
 "PlayerReachableByGround": "",
 "PlayerSpec": "",
-"PlayerWithinDetectionZone": "",
 "PlayerWithinThreshold": "",
 "PracticeTeleporter": "",
 "Predator": "",
@@ -847,7 +889,6 @@ _global_script_class_icons={
 "ReturnToTerritoryBehavior": "",
 "Rock": "",
 "RotatingBar": "",
-"Sim": "",
 "SimLoop": "",
 "SimSpec": "",
 "SlidingBar": "",
@@ -870,6 +911,7 @@ _global_script_class_icons={
 "ThreadPool": "",
 "Tools": "",
 "TrackingCamera": "",
+"TrackingCameraController": "",
 "Turtle": "",
 "UniformDistribution": "",
 "VRAction": "",
@@ -906,7 +948,7 @@ formats/gzip/compression_level=3
 
 [debug]
 
-settings/fps/force_fps=10
+settings/stdout/print_fps=true
 gdscript/warnings/treat_warnings_as_errors=true
 
 [display]
@@ -1130,3 +1172,4 @@ common/enable_object_picking=false
 environment/default_clear_color=Color( 0, 0, 0, 1 )
 quality/filters/msaa=2
 quality/depth/hdr=false
+environment/default_environment="res://game/scene_root/world_environment.tres"

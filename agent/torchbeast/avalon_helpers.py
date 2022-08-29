@@ -1,8 +1,13 @@
 import copy
+import json
+import os.path
+import pickle
 import signal
 from collections import OrderedDict
 from collections import defaultdict
+from pathlib import Path
 from typing import Dict
+from typing import List
 
 import attr
 import gym
@@ -17,18 +22,20 @@ from gym.spaces import flatdim
 from psutil import NoSuchProcess
 from psutil import Process
 
-from agent.godot_gym import AvalonGodotEnvWrapper
-from agent.godot_gym import GodotEnvParams
-from agent.godot_gym import GodotObsTransformWrapper
-from agent.godot_gym import ScaleAndSquashAction
-from agent.godot_gym import TrainingProtocolChoice
-from agent.godot_gym import VRActionType
+from agent.godot.godot_gym import LEVEL_OUTPUT_PATH
+from agent.godot.godot_gym import AvalonGodotEnvWrapper
+from agent.godot.godot_gym import GodotEnvironmentParams
+from agent.godot.godot_gym import GodotObsTransformWrapper
+from agent.godot.godot_gym import ScaleAndSquashAction
+from agent.godot.godot_gym import TrainingProtocolChoice
+from agent.godot.godot_gym import VRActionType
+from agent.godot.godot_gym import task_groups_from_training_protocol
 from agent.torchbeast.core.environment import Environment
 from agent.torchbeast.core.vtrace import VTraceFromLogitsReturns
 from agent.torchbeast.core.vtrace import from_importance_weights
 from common.log_utils import logger
-from contrib.serialization import Serializable
 from datagen.world_creation.constants import AvalonTask
+from datagen.world_creation.world_generator import get_world_params_for_task_groups
 
 
 def get_dict_action_space(num_actions: int):
@@ -246,35 +253,93 @@ class FlattenAction(gym.ActionWrapper):
 
 
 @attr.s(auto_attribs=True, collect_by_mro=True)
-class WrappedGodotEnvParams(Serializable):
-    env_params: GodotEnvParams
+class WrappedGodotEnvironmentParams:
+    env_params: GodotEnvironmentParams
     task_difficulty_update: float
     meta_difficulty_update: float
+    is_resume_allowed: bool = True
 
 
-def godot_config_from_flags(
-    flags, random_int: int, is_fixed_generator: bool = False, num_fixed_worlds_per_task: int = 6
-) -> WrappedGodotEnvParams:
+TORCHBEAST_ENV_LOGS_PATH = Path("/mnt/private/torchbeast/logs")
+
+
+def godot_config_from_flags(flags, random_int: int, env_index: int = 0) -> WrappedGodotEnvironmentParams:
     num_gpus = torch.cuda.device_count()
-    return WrappedGodotEnvParams(
-        env_params=GodotEnvParams(
-            random_int=random_int,
-            gpu_id=(random_int % num_gpus),
+    # TODO make less bad?
+    if flags.mode == "test":
+        random_int = 2000
+        goal_progress_path = TORCHBEAST_ENV_LOGS_PATH
+    else:
+        random_int += env_index
+        goal_progress_path = None
+    return WrappedGodotEnvironmentParams(
+        env_params=GodotEnvironmentParams(
+            seed=random_int,
+            gpu_id=(env_index % num_gpus),
+            env_index=env_index,
+            env_count=flags.num_servers,
             energy_cost_coefficient=flags.energy_cost_coefficient,
-            max_frames=flags.max_frames,
             fixed_world_max_difficulty=flags.fixed_world_max_difficulty,
-            is_fixed_generator=is_fixed_generator,
-            num_fixed_worlds_per_task=num_fixed_worlds_per_task,
+            mode=flags.mode,
             training_protocol=TrainingProtocolChoice[flags.training_protocol.upper()],
             is_task_curriculum_used=not flags.is_task_curriculum_disabled,
             is_meta_curriculum_used=not flags.is_meta_curriculum_disabled,
+            is_debugging_godot=flags.mode == "test",
+            head_pitch_coefficient=flags.head_pitch_coefficient,
+            head_roll_coefficient=flags.head_roll_coefficient,
+            goal_progress_path=goal_progress_path,
+            energy_cost_aggregator=flags.energy_cost_aggregator,
+            is_video_logged=flags.save_test_videos,
+            is_action_logged=flags.save_test_videos,
         ),
         task_difficulty_update=flags.task_difficulty_update,
         meta_difficulty_update=flags.meta_difficulty_update,
+        is_resume_allowed=True,
     )
 
 
-def create_godot_env(params: WrappedGodotEnvParams):
+def get_num_test_worlds_from_flags(flags) -> int:
+    params = godot_config_from_flags(flags, random_int=0).env_params
+    task_groups = task_groups_from_training_protocol(params.training_protocol, params.is_meta_curriculum_used)
+    difficulties = tuple(
+        np.linspace(
+            params.fixed_world_min_difficulty, params.fixed_world_max_difficulty, params.num_fixed_worlds_per_task
+        )
+    )
+    world_params = get_world_params_for_task_groups(
+        task_groups,
+        difficulties,
+        Path(LEVEL_OUTPUT_PATH),
+        params.seed,
+    )
+    return len(world_params)
+
+
+def get_goal_progress_files() -> List[Path]:
+    return list(TORCHBEAST_ENV_LOGS_PATH.rglob("goal_progress.json"))
+
+
+def get_avalon_test_scores(prefix: str = "test/") -> Dict[str, float]:
+    goal_progress_files = get_goal_progress_files()
+
+    results_by_task = defaultdict(lambda: defaultdict(list))
+    for filename in goal_progress_files:
+        with open(filename, "r") as f:
+            run_data = json.load(f)
+        final_data = run_data[-1]["log"]
+        task = final_data["task"].lower()
+        results_by_task[task]["episode_length"].append(len(run_data))
+        results_by_task[task]["episode_reward"].append(sum(x["reward"] for x in run_data))
+        results_by_task[task]["final_success"].append(final_data["success"])
+    log_results: Dict[str, float] = {}
+    for task, results in results_by_task.items():
+        for result_key, result_values in results.items():
+            log_results[f"{prefix}{task}/{result_key}"] = sum(result_values) / len(result_values)
+            log_results[f"{prefix}{task}/num_episodes"] = len(result_values)
+    return log_results
+
+
+def create_godot_env(params: WrappedGodotEnvironmentParams):
     logger.info(f"Creating godot env with params {params}")
     env = AvalonGodotEnvWrapper(params.env_params)
     # env = WarpFrame(env, grayscale=False, dict_space_key="rgb")
@@ -286,6 +351,7 @@ def create_godot_env(params: WrappedGodotEnvParams):
             env,
             task_difficulty_update=params.task_difficulty_update,
             meta_difficulty_update=params.meta_difficulty_update,
+            is_resume_allowed=params.is_resume_allowed,
         )
     return env
 
@@ -327,19 +393,20 @@ def _destroy_process_tree(parent_pid: int, final_signal: int = signal.SIGKILL):
 
 
 class CurriculumWrapper(Wrapper):
-    def __init__(self, env, task_difficulty_update, meta_difficulty_update):
+    def __init__(self, env, task_difficulty_update: float, meta_difficulty_update: float, is_resume_allowed: bool):
         super().__init__(env)
-        self._env = env
         self.difficulties = defaultdict(float)
         self.task_difficulty_update = task_difficulty_update
         self.meta_difficulty_update = meta_difficulty_update
         self.meta_difficulty = 0.0
+        if is_resume_allowed:
+            self.load_curriculum_state_from_file_if_exists()
 
     def step(self, action: Dict[str, torch.Tensor]):
         observation, reward, done, info = self.env.step(action)
         if done:
             task = AvalonTask[info["task"]]
-            update_step = self.task_difficulty_update * np.random.uniform()
+            update_step = self.task_difficulty_update  # * np.random.uniform()
             if info["success"] == 1:
                 self.difficulties[task] += update_step
                 self.meta_difficulty += self.meta_difficulty_update
@@ -350,6 +417,20 @@ class CurriculumWrapper(Wrapper):
                 assert False, info["success"]
             self.difficulties[task] = max(min(self.difficulties[task], 1.0), 0.0)
             self.meta_difficulty = max(min(self.meta_difficulty, 1.0), 0.0)
-            self._env.set_task_difficulty(task, self.difficulties[task])
-            self._env.set_meta_difficulty(self.meta_difficulty)
+            self.env.set_task_difficulty(task, self.difficulties[task])
+            self.env.set_meta_difficulty(self.meta_difficulty)
+            self.save_curriculum_state_to_file()
         return observation, reward, done, info
+
+    def save_curriculum_state_to_file(self):
+        with open(self.env.curriculum_save_path, "wb") as f:
+            pickle.dump({"difficulties": self.difficulties, "meta_difficulty": self.meta_difficulty}, f)
+
+    def load_curriculum_state_from_file_if_exists(self):
+        filepath = self.env.curriculum_save_path
+        if os.path.exists(filepath):
+            with open(filepath, "rb") as f:
+                data = pickle.load(f)
+            self.difficulties = data["difficulties"]
+            self.meta_difficulty = data["meta_difficulty"]
+            logger.info(f"Loaded curriculum from {filepath}")

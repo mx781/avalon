@@ -2,7 +2,8 @@ extends Area
 
 class_name NaturalWeapon
 
-var _player  #: Player TODO(mjr) type hint causing a cyclical dependency/parser issue. Maybe just dirty state
+var is_able_to_attack := false
+var _player: Player
 
 
 func _ready():
@@ -10,21 +11,21 @@ func _ready():
 	HARD.assert(OK == connect("body_exited", self, "_on_body_exited"), "Failed to connect signal")
 
 
-func is_able_to_attack() -> bool:
-	return _player != null
-
-
 func attack(damage: float):
 	_player.take_damage(damage)
 
 
 func _on_body_entered(body: Node):
-	# TODO make more specific
-	# TODO may be some bug with large detection radiuses due to load/unload
-	if body is KinematicBody and body.name == "physical_body":
-		_player = body.get_parent().get_parent()
+	if is_player_body(body):
+		is_able_to_attack = true
 
 
 func _on_body_exited(body: Node):
-	if body is KinematicBody and body.name == "physical_body":
-		_player = null
+	if is_player_body(body):
+		is_able_to_attack = false
+
+
+func is_player_body(body: Node) -> bool:
+	if _player == null:
+		_player = get_tree().root.find_node("player", true, false)
+	return body == _player.physical_body

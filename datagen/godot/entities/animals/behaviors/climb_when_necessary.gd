@@ -5,7 +5,6 @@ class_name ClimbWhenNecessary
 const DOWN = Vector2(0, -1)
 const UP = Vector2(0, 1)
 
-# TODO consider adding horizontal component
 var climb_speed: float
 var escape_hop_speed: Vector2
 var is_horizontal_movement_enabled := false
@@ -39,7 +38,6 @@ func get_climb_direction(animal: Animal) -> Vector2:
 	var directed = hop_behavior as HopInDirection
 	var target = directed.target_position(animal)
 
-	# TODO should just be a single vector method
 	var is_facing_target = animal.is_point_in_front_of(target)
 
 	# climbing down only happens when "giving up," so if we've started climbing,
@@ -82,14 +80,14 @@ func make_escape_hop_until_landed(animal: Animal, delta: float):
 		return animal.controller.move(continue_forward_velocity, delta)
 
 	if not is_making_escape_hop and get_climb_direction(animal) == UP:
+		if HARD.mode():
+			print("%s is hopping out of a climb" % animal)
 		is_making_escape_hop = true
 		reset_criteria()
 		var escape_hop = animal.forward_hop(escape_hop_speed)
 		return animal.controller.move(escape_hop, delta)
 
 
-# TODO downward climbing could be tough – a climber could notice it's floor ray lose contact,
-# then rotate vertically and snap to the wall.
 func do(animal: Animal, delta: float) -> Vector3:
 	var is_able_to_climb = animal.controller.is_able_to_climb()
 	var is_climbing = animal.is_climbing()
@@ -110,10 +108,16 @@ func do(animal: Animal, delta: float) -> Vector3:
 	var direction = get_climb_direction(animal)
 
 	if direction.y == DOWN.y:
-		if animal.is_close_to_bottom_of_climb():
-			animal.stop_climbing()
 		if not is_climbing:
 			return hop_behavior.do(animal, delta)
+		if is_close_to_bottom_of_climb(animal):
+			if HARD.mode():
+				print("%s dropping from climb" % animal)
+			animal.stop_climbing()
+			return hop_behavior.do(animal, delta)
+
+	if not is_climbing and HARD.mode():
+		print("%s started climbing" % animal)
 
 	return animal.controller.climb(direction * climb_speed, delta)
 
@@ -122,6 +126,10 @@ func is_making_headway_without_climbing(animal: Animal) -> bool:
 	if animal.is_climbing():
 		return false
 	return grounded_headway_criteria != null and grounded_headway_criteria.is_matched_by(animal)
+
+
+func is_close_to_bottom_of_climb(animal: Animal) -> bool:
+	return animal.is_climbing() and animal.controller.get_floor_ray().is_colliding()
 
 
 func reset_criteria():

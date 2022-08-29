@@ -1,12 +1,11 @@
 import math
+from itertools import combinations
 from random import Random
 from typing import Callable
-from typing import Dict
 from typing import List
 from typing import NamedTuple
 from typing import Optional
 from typing import Tuple
-from typing import Type
 
 import attr
 import networkx as nx
@@ -14,46 +13,52 @@ import numpy as np
 from matplotlib import patches
 from matplotlib import pyplot as plt
 from networkx import Graph
+from networkx.algorithms.approximation import traveling_salesman_problem
 from scipy import stats
+from scipy.ndimage import convolve
 from scipy.spatial import Delaunay
 from scipy.spatial.qhull import QhullError
 
 from common.errors import SwitchError
 from common.utils import only
 from contrib.serialization import Serializable
-from datagen.godot_base_types import NewRange
+from datagen.errors import ImpossibleWorldError
+from datagen.godot_base_types import IntRange
 from datagen.godot_base_types import Vector3
-from datagen.world_creation.constants import MAX_JUMP_HEIGHT_METERS
-from datagen.world_creation.geometry import Position
+from datagen.world_creation.debug_plots import IS_DEBUG_VIS
+from datagen.world_creation.geometry import BuildingTile
 from datagen.world_creation.geometry import euclidean_distance
 from datagen.world_creation.geometry import get_triangulation_edges
+from datagen.world_creation.indoor.blocks import make_blocks_from_tiles
+from datagen.world_creation.indoor.building import BuildingAestheticsConfig
+from datagen.world_creation.indoor.components import Entrance
+from datagen.world_creation.indoor.components import Hallway
+from datagen.world_creation.indoor.components import Ladder
+from datagen.world_creation.indoor.components import Ramp
+from datagen.world_creation.indoor.components import Room
+from datagen.world_creation.indoor.components import RoomPlacementError
+from datagen.world_creation.indoor.components import RoomTileGraph
+from datagen.world_creation.indoor.components import Story
+from datagen.world_creation.indoor.components import StoryLink
+from datagen.world_creation.indoor.components import Window
+from datagen.world_creation.indoor.components import add_room_tiles_to_grid
+from datagen.world_creation.indoor.components import generate_room
+from datagen.world_creation.indoor.components import set_link_in_grid
 from datagen.world_creation.indoor.constants import DEFAULT_STORY_HEIGHT
-from datagen.world_creation.indoor.helpers import draw_line_in_grid
-from datagen.world_creation.indoor.helpers import visualize_tiles
-from datagen.world_creation.indoor.objects import Azimuth
-from datagen.world_creation.indoor.objects import BuildingAestheticsConfig
-from datagen.world_creation.indoor.objects import Entrance
-from datagen.world_creation.indoor.objects import FloorChasm
-from datagen.world_creation.indoor.objects import Hallway
-from datagen.world_creation.indoor.objects import Obstacle
-from datagen.world_creation.indoor.objects import Orientation
-from datagen.world_creation.indoor.objects import Ramp
-from datagen.world_creation.indoor.objects import Room
-from datagen.world_creation.indoor.objects import RoomPlacementError
-from datagen.world_creation.indoor.objects import Story
-from datagen.world_creation.indoor.objects import StoryLink
-from datagen.world_creation.indoor.objects import TileIdentity
-from datagen.world_creation.indoor.objects import Wall
-from datagen.world_creation.indoor.objects import Window
-from datagen.world_creation.indoor.objects import add_room_tiles_to_grid
-from datagen.world_creation.indoor.objects import find_exterior_wall_footprints
-from datagen.world_creation.indoor.objects import generate_blocks
-from datagen.world_creation.indoor.objects import generate_room
-from datagen.world_creation.indoor.objects import get_evenly_spaced_centroids
-from datagen.world_creation.indoor.objects import set_link_in_grid
-from datagen.world_creation.utils import IS_DEBUG_VIS
-from datagen.world_creation.utils import ImpossibleWorldError
-from datagen.world_creation.utils import inset_borders
+from datagen.world_creation.indoor.constants import MIN_BUILDING_SIZE
+from datagen.world_creation.indoor.constants import MIN_ROOM_SIZE
+from datagen.world_creation.indoor.constants import Azimuth
+from datagen.world_creation.indoor.constants import Orientation
+from datagen.world_creation.indoor.constants import TileIdentity
+from datagen.world_creation.indoor.constants import WallType
+from datagen.world_creation.indoor.tiles import draw_line_in_grid
+from datagen.world_creation.indoor.tiles import find_exterior_wall_footprints
+from datagen.world_creation.indoor.tiles import get_neighbor_tiles
+from datagen.world_creation.indoor.tiles import visualize_tiles
+from datagen.world_creation.indoor.utils import get_evenly_spaced_centroids
+from datagen.world_creation.indoor.utils import inset_borders
+from datagen.world_creation.indoor.utils import rand_integer
+from datagen.world_creation.types import BuildingBoolNP
 
 
 @attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
@@ -64,16 +69,18 @@ class FootprintBuilder(Serializable):
         building_length: int,
         story_num: int,
         rand: np.random.Generator,
-        footprint_below: Optional[np.ndarray],
-    ) -> np.ndarray:
-        """returns a np.array of shape (building_length, building_width) where True represents buildable tiles"""
+        footprint_below: Optional[BuildingBoolNP],
+    ) -> BuildingBoolNP:
+        """returns a `np.array` of shape (building_length, building_width) where True represents buildable tiles"""
         raise NotImplementedError
 
     @staticmethod
-    def inset_footprint(footprint: np.ndarray, inset: int = 1):
+    def inset_footprint(
+        footprint: BuildingBoolNP, inset: int = 1, min_leftover_size: int = MIN_BUILDING_SIZE
+    ) -> BuildingBoolNP:
         reduced_footprint = footprint.copy()
         for i in range(inset):
-            reduced_footprint = inset_borders(reduced_footprint)
+            reduced_footprint = inset_borders(reduced_footprint, min_leftover_size)
         return reduced_footprint
 
 
@@ -85,8 +92,8 @@ class RectangleFootprintBuilder(FootprintBuilder):
         building_length: int,
         story_num: int,
         rand: np.random.Generator,
-        footprint_below: Optional[np.ndarray],
-    ) -> np.ndarray:
+        footprint_below: Optional[BuildingBoolNP],
+    ) -> BuildingBoolNP:
         if story_num != 0:
             return FootprintBuilder.inset_footprint(footprint_below)
         return np.ones((building_length, building_width), dtype=np.bool_)
@@ -102,15 +109,18 @@ class TLShapeFootprintBuilder(FootprintBuilder):
         building_length: int,
         story_num: int,
         rand: np.random.Generator,
-        footprint_below: Optional[np.ndarray],
-    ) -> np.ndarray:
+        footprint_below: Optional[BuildingBoolNP],
+    ) -> BuildingBoolNP:
+        if building_width == building_length == MIN_BUILDING_SIZE:
+            raise ImpossibleWorldError("Building too small to form a T/L shape footprint")
+
         if story_num == 1:
             # Optionally inverting block generation direction gives us more variety
             inverted = rand.choice([True, False])
             footprint_below = footprint_below.copy().T if inverted else footprint_below.copy()
-            blocks = generate_blocks(footprint_below, SOLID=True)
-            min_block_size = 3  # avoid tiny sections that can't have rooms built into them
-            block = rand.choice([b for b in blocks if b.x.size >= min_block_size and b.z.size > min_block_size])
+            blocks = make_blocks_from_tiles(footprint_below, solid_tile_value=True)
+            min_block_size = MIN_BUILDING_SIZE  # avoid tiny sections that can't have rooms built into them
+            block = rand.choice([b for b in blocks if b.x.size >= min_block_size and b.z.size >= min_block_size])
             footprint = np.zeros((building_length, building_width), dtype=np.bool_)
             if inverted:
                 tmp = block.x
@@ -124,23 +134,48 @@ class TLShapeFootprintBuilder(FootprintBuilder):
         rectangles = []
         footprint = np.zeros((building_length, building_width), dtype=np.bool_)
 
-        rectangle_width = rand.integers(round(building_width * 0.4), round(building_width * 0.8))
+        min_width = max(round(building_width * 0.4), MIN_BUILDING_SIZE)
+        max_width = max(round(building_width * 0.8), MIN_BUILDING_SIZE)
+
+        rectangle_width = rand_integer(rand, min_width, max_width)
         if building_length > building_width and self.allow_t_shape:
             x_offset = rand.choice([0, building_width - rectangle_width])
         else:
-            x_offset = rand.integers(0, building_width - rectangle_width)
+            x_offset = rand_integer(rand, 0, building_width - rectangle_width)
         rectangles.append((x_offset, 0, rectangle_width, building_length))
 
-        rectangle_length = rand.integers(round(building_length * 0.4), round(building_length * 0.8))
+        min_length = max(round(building_length * 0.4), MIN_BUILDING_SIZE)
+        max_length = max(round(building_length * 0.8), MIN_BUILDING_SIZE)
+        rectangle_length = rand_integer(rand, min_length, max_length)
         if building_width > building_length and self.allow_t_shape:
             z_offset = rand.choice([0, building_length - rectangle_length])
         else:
-            z_offset = rand.integers(0, building_length - rectangle_length)
+            z_offset = rand_integer(rand, 0, building_length - rectangle_length)
         rectangles.append((0, z_offset, building_width, rectangle_length))
 
         for x_offset, z_offset, building_width, building_length in rectangles:
             footprint[z_offset : z_offset + building_length, x_offset : x_offset + building_width] = 1
         return footprint
+
+
+def _smooth(array):
+    raveled = array.ravel()
+    cuts = np.where(np.diff(raveled) != 0)[0] + 1
+    chunks = np.split(raveled, cuts)
+    for chunk in chunks:
+        if (chunk == 1).all() and chunk.size <= 2:
+            chunk[True] = 0
+
+
+def smooth_footprint(footprint: np.ndarray):
+    """
+    Removes sections of the footprint that are effectively zero-width (left wall
+    is adjacent to right wall / top wall is adjacent to bottom wall).
+    """
+    _smooth(footprint)
+    transposed_footprint = footprint.T.copy()
+    _smooth(transposed_footprint)
+    footprint[transposed_footprint.T == 0] = 0
 
 
 @attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
@@ -151,19 +186,30 @@ class IrregularFootprintBuilder(FootprintBuilder):
         building_length: int,
         story_num: int,
         rand: np.random.Generator,
-        footprint_below: Optional[np.ndarray],
-    ) -> np.ndarray:
+        footprint_below: Optional[BuildingBoolNP],
+    ) -> BuildingBoolNP:
+        if building_width == building_length == MIN_BUILDING_SIZE:
+            raise ImpossibleWorldError("Building too small to form an irregular shape footprint")
+
         if story_num != 0:
-            return FootprintBuilder.inset_footprint(footprint_below)
+            footprint = FootprintBuilder.inset_footprint(footprint_below)
+            smooth_footprint(footprint)
+            return footprint
 
         footprint = np.zeros((building_length, building_width), dtype=np.bool_)
         rectangles = []
         for i in range(5):
-            rectangle_width = rand.integers(round(building_width * 0.5), round(building_width * 0.9))
-            rectangle_length = rand.integers(round(building_length * 0.5), round(building_length * 0.9))
+            min_width = max(round(building_width * 0.5), MIN_BUILDING_SIZE)
+            max_width = max(round(building_width * 0.9), MIN_BUILDING_SIZE)
+            min_length = max(round(building_length * 0.5), MIN_BUILDING_SIZE)
+            max_length = max(round(building_length * 0.9), MIN_BUILDING_SIZE)
+
+            rectangle_width = rand_integer(rand, min_width, max_width)
+            rectangle_length = rand_integer(rand, min_length, max_length)
+
             if i == 0:
-                x_offset = rand.integers(0, building_width - rectangle_width)
-                z_offset = rand.integers(0, building_length - rectangle_length)
+                x_offset = rand_integer(rand, 0, building_width - rectangle_width)
+                z_offset = rand_integer(rand, 0, building_length - rectangle_length)
             else:
                 another_rectangle = rand.choice(rectangles)
                 possible_x_offsets = [another_rectangle[0]]
@@ -179,9 +225,9 @@ class IrregularFootprintBuilder(FootprintBuilder):
                 aligned_offset = rand.choice(["x", "z"])
                 if aligned_offset == "x":
                     x_offset = rand.choice(possible_x_offsets)
-                    z_offset = rand.integers(0, building_length - rectangle_length)
+                    z_offset = rand_integer(rand, 0, building_length - rectangle_length)
                 else:
-                    x_offset = rand.integers(0, building_width - rectangle_width)
+                    x_offset = rand_integer(rand, 0, building_width - rectangle_width)
                     z_offset = rand.choice(possible_z_offsets)
             rectangles.append((x_offset, z_offset, rectangle_width, rectangle_length))
 
@@ -215,7 +261,7 @@ class DefaultRoomBuilder(RoomBuilder):
         assert room_floor_space < world_width * world_length, "Room floor space exceeds world size"
         return self._place_rooms(story_footprint, rooms)
 
-    def _place_rooms(self, story_footprint: np.ndarray, rooms: List[Room]) -> List[Room]:
+    def _place_rooms(self, story_footprint: BuildingBoolNP, rooms: List[Room]) -> List[Room]:
         """
         At its core, this is a rectangle packing problem, which is NP-hard. There are many published algorithms out there
         that we could use if we want to, but the one below is a quick and dirty homemade one while we iterate this.
@@ -223,7 +269,7 @@ class DefaultRoomBuilder(RoomBuilder):
         grid = np.invert(story_footprint).astype(np.int64)
         placed_rooms = []
         sorted_rooms = sorted(rooms, key=lambda r: r.floor_space, reverse=True)
-        blocks = generate_blocks(grid)
+        blocks = make_blocks_from_tiles(grid)
         margin = 1
         for i, room in enumerate(sorted_rooms):
             for block in blocks:
@@ -233,11 +279,11 @@ class DefaultRoomBuilder(RoomBuilder):
                     continue
                 center = block.x.min_ge + block_width // 2, block.z.min_ge + block_length // 2
                 room = room.with_position(
-                    Position(x=center[0] - room.width // 2, z=center[1] - room.length // 2)
+                    BuildingTile(x=center[0] - room.width // 2, z=center[1] - room.length // 2)
                 ).with_id(i)
                 add_room_tiles_to_grid(room, room.tiles, grid)
                 placed_rooms.append(room)
-                blocks = generate_blocks(grid)
+                blocks = make_blocks_from_tiles(grid)
                 break
             else:
                 # The options here are: a) try a more compact placement algorithm; b) skip room; for now we just raise
@@ -258,9 +304,10 @@ class CustomRoomBuilder(RoomBuilder):
 
 @attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
 class HouseLikeRoomBuilder(RoomBuilder):
-    min_room_size: int = 3
+    min_room_size: int = 3  # Note: this param will not be obeyed if the building is too small to fit
     max_rooms: int = np.inf
     partition_thickness: int = 1
+    room_height: int = DEFAULT_STORY_HEIGHT
 
     def build(self, story_footprint: np.array, rand: np.random.Generator) -> List[Room]:
         world_length, world_width = story_footprint.shape
@@ -269,13 +316,19 @@ class HouseLikeRoomBuilder(RoomBuilder):
         # Separate footprint into rectangles as "initial rooms"
         padded_footprint = story_footprint.copy()
         for i in range(self.partition_thickness):
-            padded_footprint = inset_borders(padded_footprint)
-        footprint_blocks = generate_blocks(padded_footprint, SOLID=True)
+            # We want rooms to be at least of width 2 to be able to place story links that we can walk around
+            padded_footprint = inset_borders(padded_footprint, min_leftover_size=MIN_ROOM_SIZE)
+        footprint_blocks = make_blocks_from_tiles(padded_footprint, solid_tile_value=True)
         initial_rooms = [
-            Room(-1, Position(block.x.min_ge, block.z.min_ge), block.x.size, block.z.size, DEFAULT_STORY_HEIGHT)
+            Room(-1, BuildingTile(block.x.min_ge, block.z.min_ge), block.x.size, block.z.size, self.room_height)
             for block in footprint_blocks
         ]
-        initial_orientation = Orientation.HORIZONTAL
+
+        if len(initial_rooms) == 1 and initial_rooms[0].width == 1 or initial_rooms[0].length == 1:
+            # Don't make rooms that can't have walls built between them anyway
+            return [room.with_id(i) for i, room in enumerate(initial_rooms)]
+
+        initial_orientation = rand.choice(list(Orientation))
 
         # Then partition each of the rooms
         rooms = []
@@ -286,15 +339,15 @@ class HouseLikeRoomBuilder(RoomBuilder):
         elif len(initial_rooms) == self.max_rooms:
             rooms = initial_rooms
         else:
-            room_credits = self.max_rooms - len(initial_rooms)  # how many more rooms can you create
+            leftover_credits = self.max_rooms - len(initial_rooms)  # how many more rooms can you create
             for room in initial_rooms:
-                new_rooms = self._partition(
+                new_rooms, leftover_credits = self._partition(
                     room,
                     initial_orientation,
                     world_width,
                     world_length,
                     self.partition_thickness,
-                    room_credits,
+                    leftover_credits,
                     random_state,
                 )
                 rooms.extend(new_rooms)
@@ -309,17 +362,16 @@ class HouseLikeRoomBuilder(RoomBuilder):
         partition_thickness: int,
         leftover_room_credits: int,
         random_state: np.random.RandomState,
-    ) -> List[Room]:
+    ) -> Tuple[List[Room], int]:
         if leftover_room_credits == 0:
-            return [room]
+            return [room], leftover_room_credits
 
         if orientation == Orientation.HORIZONTAL:
             edge_size = room.width
         else:
             edge_size = room.length
         if edge_size < 2 * self.min_room_size + partition_thickness:
-            return [room]
-        # todo: use reduced-kurtosis normal distribution and scale ourselves
+            return [room], leftover_room_credits
         partition_location_distribution = stats.uniform(
             self.min_room_size, edge_size - 2 * self.min_room_size - partition_thickness
         )
@@ -328,14 +380,14 @@ class HouseLikeRoomBuilder(RoomBuilder):
         if orientation == Orientation.HORIZONTAL:
             partition_a = Room(
                 -1,
-                Position(room.position.x, room.position.z),
+                BuildingTile(room.position.x, room.position.z),
                 width=partition_location,
                 length=room.length,
                 outer_height=room.outer_height,
             )
             partition_b = Room(
                 -1,
-                Position(room.position.x + second_room_offset, room.position.z),
+                BuildingTile(room.position.x + second_room_offset, room.position.z),
                 width=room.width - second_room_offset,
                 length=room.length,
                 outer_height=room.outer_height,
@@ -344,14 +396,14 @@ class HouseLikeRoomBuilder(RoomBuilder):
         else:
             partition_a = Room(
                 -1,
-                Position(room.position.x, room.position.z),
+                BuildingTile(room.position.x, room.position.z),
                 width=room.width,
                 length=partition_location,
                 outer_height=room.outer_height,
             )
             partition_b = Room(
                 -1,
-                Position(room.position.x, room.position.z + second_room_offset),
+                BuildingTile(room.position.x, room.position.z + second_room_offset),
                 width=room.width,
                 length=room.length - second_room_offset,
                 outer_height=room.outer_height,
@@ -359,63 +411,90 @@ class HouseLikeRoomBuilder(RoomBuilder):
         next_partition_dimension_size = world_width if orientation == Orientation.HORIZONTAL else world_length
         probability_keep_partitioning = edge_size / next_partition_dimension_size
         keep_partitioning_probabilities = [probability_keep_partitioning, 1 - probability_keep_partitioning]
-        # todo: make this not independent (have branches that have a high value and ones that have low)
         keep_partitioning_a = random_state.choice([True, False], p=keep_partitioning_probabilities)
         keep_partitioning_b = random_state.choice([True, False], p=keep_partitioning_probabilities)
         orientation = orientation.other()
         leftover_room_credits -= 1
-        return [
-            *(
-                self._partition(
-                    partition_a,
-                    orientation,
-                    world_width,
-                    world_length,
-                    partition_thickness,
-                    leftover_room_credits,
-                    random_state,
-                )
-                if keep_partitioning_a
-                else [partition_a]
-            ),
-            *(
-                self._partition(
-                    partition_b,
-                    orientation,
-                    world_width,
-                    world_length,
-                    partition_thickness,
-                    leftover_room_credits,
-                    random_state,
-                )
-                if keep_partitioning_b
-                else [partition_b]
-            ),
-        ]
+        partitioned_a, leftover_room_credits = (
+            self._partition(
+                partition_a,
+                orientation,
+                world_width,
+                world_length,
+                partition_thickness,
+                leftover_room_credits,
+                random_state,
+            )
+            if keep_partitioning_a
+            else ([partition_a], leftover_room_credits)
+        )
+        partitioned_b, leftover_room_credits = (
+            self._partition(
+                partition_b,
+                orientation,
+                world_width,
+                world_length,
+                partition_thickness,
+                leftover_room_credits,
+                random_state,
+            )
+            if keep_partitioning_b
+            else ([partition_b], leftover_room_credits)
+        )
+        return [*partitioned_a, *partitioned_b], leftover_room_credits
 
 
-def get_room_overlap(room_a: Room, room_b: Room) -> Tuple[NewRange, NewRange]:
+def get_room_overlap(room_a: Room, room_b: Room) -> Tuple[Optional[IntRange], Optional[IntRange]]:
     return room_a.x_range.overlap(room_b.x_range), room_a.z_range.overlap(room_b.z_range)
 
 
-def get_closest_points(room_a: Room, room_b: Room) -> Tuple[Position, Position]:
-    # assumes no overlap; todo: assert?
-    rightmost_room = room_a if room_a.center.x > room_b.center.x else room_b
-    bottommost_room = room_a if room_a.center.z > room_b.center.z else room_b
-    x_start = min(room_a.x_range.max_lt, room_b.x_range.max_lt) - 1
-    x_end = max(room_a.x_range.min_ge, room_b.x_range.min_ge)
-    if rightmost_room == bottommost_room:
-        z_start = min(room_a.z_range.max_lt, room_b.z_range.max_lt) - 1
-        z_end = max(room_a.z_range.min_ge, room_b.z_range.min_ge)
+def are_rooms_neighboring(room_a: Room, room_b: Room, max_gap: int = 1) -> bool:
+    x_overlap, z_overlap = get_room_overlap(room_a, room_b)
+    if x_overlap is not None:
+        topmost_bottom = min(room_a.position.z + room_a.length, room_b.position.z + room_b.length) - 1
+        bottommost_top = max(room_a.position.z, room_b.position.z)
+        # The gap is one less than index difference (adjacent room idx delta is 1, but the "gap" is 0)
+        gap = bottommost_top - topmost_bottom - 1
+        return gap <= max_gap
+    elif z_overlap is not None:
+        leftmost_right = min(room_a.position.x + room_a.width, room_b.position.x + room_b.width) - 1
+        rightmost_left = max(room_a.position.x, room_b.position.x)
+        gap = rightmost_left - leftmost_right - 1
+        return gap <= max_gap
     else:
-        z_start = max(room_a.z_range.min_ge, room_b.z_range.min_ge)
-        z_end = min(room_a.z_range.max_lt, room_b.z_range.max_lt) - 1
-    return Position(x_start, z_start), Position(x_end, z_end)
+        return False
+
+
+def get_hallway_attachment_points(room_a: Room, room_b: Room) -> Tuple[BuildingTile, BuildingTile]:
+    overlap_x, overlap_z = get_room_overlap(room_a, room_b)
+    rightmost_room = room_a if room_a.center.x > room_b.center.x else room_b
+    leftmost_room = room_a if rightmost_room == room_b else room_b
+    bottommost_room = room_a if room_a.center.z > room_b.center.z else room_b
+    topmost_room = room_a if bottommost_room == room_b else room_b
+    if overlap_x:
+        x_left = x_right = math.floor(overlap_x.midpoint)
+        z_top = topmost_room.z_range.max_lt - 1
+        z_bottom = bottommost_room.position.z
+    elif overlap_z:
+        z_top = z_bottom = math.floor(overlap_z.midpoint)
+        x_left = leftmost_room.x_range.max_lt - 1
+        x_right = rightmost_room.position.x
+    else:
+        x_left = min(room_a.x_range.max_lt, room_b.x_range.max_lt) - 1
+        x_right = max(room_a.x_range.min_ge, room_b.x_range.min_ge)
+        z_top = min(room_a.z_range.max_lt, room_b.z_range.max_lt) - 1
+        z_bottom = max(room_a.z_range.min_ge, room_b.z_range.min_ge)
+
+    attachment_a_z, attachment_b_z = (z_top, z_bottom) if topmost_room == room_a else (z_bottom, z_top)
+    attachment_a_x, attachment_b_x = (x_left, x_right) if leftmost_room == room_a else (x_right, x_left)
+    room_a_attachment_point = BuildingTile(attachment_a_x, attachment_a_z)
+    room_b_attachment_point = BuildingTile(attachment_b_x, attachment_b_z)
+    return room_a_attachment_point, room_b_attachment_point
 
 
 @attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
 class HallwayBuilder(Serializable):
-    def build(self, rooms: List[Room], rng: Random) -> List[Hallway]:
+    def build(self, rooms: List[Room], rand: np.random.Generator) -> List[Hallway]:
         raise NotImplementedError
 
 
@@ -423,7 +502,7 @@ class HallwayBuilder(Serializable):
 class NoHallwayBuilder(HallwayBuilder):
     """For testing only - you want connections between rooms!"""
 
-    def build(self, rooms: List[Room], rng: Random) -> List[Hallway]:
+    def build(self, rooms: List[Room], rand: np.random.Generator) -> List[Hallway]:
         return []
 
 
@@ -431,16 +510,24 @@ class NoHallwayBuilder(HallwayBuilder):
 class DefaultHallwayBuilder(HallwayBuilder):
     proportion_additional_edges: float = 0.18
 
-    def _generate_room_connection_tree(self, rooms: List[Room], rng: Random) -> Graph:
+    def _get_room_centroids(self, rooms):
+        return {i: (r.center.x, r.center.z) for i, r in enumerate(rooms)}
+
+    def _make_complete_room_graph(self, rooms: List[Room]) -> Graph:
         graph = nx.complete_graph(len(rooms))
-        centroids_by_room = {i: (r.center.x, r.center.z) for i, r in enumerate(rooms)}
+        centroids_by_room = self._get_room_centroids(rooms)
         nx.set_node_attributes(graph, centroids_by_room, "pos")
         distance_by_rooms = {}
         for i, room_a in enumerate(rooms):
             for j, room_b in enumerate(rooms):
                 distance_by_rooms[(i, j)] = euclidean_distance(room_a.center, room_b.center)
         nx.set_edge_attributes(graph, distance_by_rooms, "distance")
+        return graph
+
+    def _make_final_room_graph(self, rooms: List[Room], rand: np.random.Generator) -> Graph:
+        graph = self._make_complete_room_graph(rooms)
         mst = nx.minimum_spanning_tree(graph, weight="distance")
+        centroids_by_room = self._get_room_centroids(rooms)
         room_centroids = np.array([list(p) for p in centroids_by_room.values()])
         if len(rooms) > 2:
             try:
@@ -451,89 +538,117 @@ class DefaultHallwayBuilder(HallwayBuilder):
             edges = get_triangulation_edges(room_triangulation)
             unjoined_edges = list(edges - set(mst.edges))
             additional_edge_count = round(self.proportion_additional_edges * len(unjoined_edges))
-            additional_edges = rng.choices(unjoined_edges, k=additional_edge_count)
+            additional_edges = rand.choice(unjoined_edges, additional_edge_count, replace=False)
             for edge_start, edge_end in additional_edges:
                 mst.add_edge(edge_start, edge_end)
         return mst
 
-    def build(self, rooms: List[Room], rng: Random) -> List[Hallway]:
+    def build(self, rooms: List[Room], rand: np.random.Generator) -> List[Hallway]:
         if len(rooms) == 1:
             return []
 
-        tree = self._generate_room_connection_tree(rooms, rng)
+        connection_graph = self._make_final_room_graph(rooms, rand)
+        tile_graph = self._make_tile_graph(rooms)
 
         hallways = []
-        for from_idx, to_idx in tree.edges:
+        for from_idx, to_idx in connection_graph.edges:
             from_room, to_room = rooms[from_idx], rooms[to_idx]
-            overlap_x, overlap_z = get_room_overlap(from_room, to_room)
-            if overlap_x:
-                overlap_midpoint = overlap_x.min_ge + (overlap_x.max_lt - overlap_x.min_ge) // 2
-                from_room_bottom = from_room.position.z + from_room.length
-                to_room_bottom = to_room.position.z + to_room.length
-                top_point_z = min(from_room_bottom, to_room_bottom)
-                bottom_point_z = max(from_room.position.z, to_room.position.z)
-                start = Position(x=overlap_midpoint, z=top_point_z - 1)
-                end = Position(x=overlap_midpoint, z=bottom_point_z)
-                if top_point_z == from_room_bottom:
-                    points = [start, end]
-                else:
-                    points = [end, start]
-            elif overlap_z:
-                overlap_midpoint = overlap_z.min_ge + (overlap_z.max_lt - overlap_z.min_ge) // 2
-                from_room_right = from_room.position.x + from_room.width
-                to_room_right = to_room.position.x + to_room.width
-                left_point_x = min(from_room_right, to_room_right)
-                right_point_x = max(from_room.position.x, to_room.position.x)
-                start = Position(x=left_point_x - 1, z=overlap_midpoint)
-                end = Position(x=right_point_x, z=overlap_midpoint)
-                if left_point_x == from_room_right:
-                    points = [start, end]
-                else:
-                    points = [end, start]
-            else:
-                # todo: need to swap start/end to ensure points are in [from_room, to_room] order
-                # raise NotImplementedError("L-shaped hallways are partly broken, talk to mx")
-                closest_points = get_closest_points(from_room, to_room)
-                start, end = closest_points
-
-                points = [start, Position(x=start.x, z=end.z), end]
-            hallway = Hallway(points, from_room.id, to_room.id, width=1)
+            hallway = self._build_hallway(tile_graph, from_room, to_room)
             hallways.append(hallway)
         return hallways
+
+    def _build_hallway(self, tile_graph: RoomTileGraph, from_room: Room, to_room: Room) -> Hallway:
+        from_room_point, to_room_point = get_hallway_attachment_points(from_room, to_room)
+        path = tile_graph.find_shortest_path(from_room_point, to_room_point)
+
+        optimized_path = [path[0]]
+        for previous_point, this_point, next_point in zip(path[:-2], path[1:-1], path[2:]):
+            previous_direction = Orientation.HORIZONTAL if this_point[0] == previous_point[0] else Orientation.VERTICAL
+            next_direction = Orientation.HORIZONTAL if this_point[0] == next_point[0] else Orientation.VERTICAL
+            if previous_direction != next_direction:
+                optimized_path.append(this_point)
+        optimized_path.append(path[-1])
+        points = tuple(BuildingTile(x=pt[1], z=pt[0]) for pt in optimized_path)
+        return Hallway(points, from_room.id, to_room.id, width=1)
+
+    def _make_tile_graph(self, rooms: List[Room]) -> RoomTileGraph:
+        return RoomTileGraph(rooms)
+
+
+@attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
+class HamiltonianHallwayBuilder(DefaultHallwayBuilder):
+    """
+    Tries to create hallways such that they form a Hamiltonian path between all the rooms.
+
+    Not all graphs have a Hamiltonian path and the implementation uses a heuristic-based TSP solutions, so the resulting
+    path may not necessarily be Hamiltonian - but it's the closest we can trivially get without a brute-force solution.
+
+    The builder checks for self-loops in the path (which would mean hallways traverse through other rooms), and raises
+    an ImpossibleWorldError if all methods fail to create a path without self-loops.
+
+    NOTE: This hallway builder is only compatible with HouseLikeRoomBuilder-built rooms.
+    """
+
+    def _make_final_room_graph(self, rooms: List[Room], rand: np.random.Generator) -> Graph:
+        graph = self._make_complete_room_graph(rooms)
+        for from_node, to_node in combinations(graph.nodes, 2):
+            from_room = rooms[from_node]
+            to_room = rooms[to_node]
+            if not are_rooms_neighboring(from_room, to_room, max_gap=1):
+                graph.remove_edge(from_node, to_node)
+
+        if len(rooms) == 1:
+            return graph
+        path = traveling_salesman_problem(graph, cycle=False)
+        is_path_hamiltonian = len(path) == len(set(path)) and len(path) == len(rooms)
+        if not is_path_hamiltonian:
+            raise ImpossibleWorldError("TSP solution yielded non-Hamiltonian paths")
+        final_graph = nx.create_empty_copy(graph)  # keeps nodes, removes edges
+        for from_node, to_node in zip(path[:-1], path[1:]):
+            final_graph.add_edge(from_node, to_node)
+        return final_graph
 
 
 @attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
 class StoryLinker(Serializable):
-    def link_stories(self, stories: List[Story], rng: Random) -> Tuple[List[Story], List[StoryLink]]:
+    def link_stories(self, stories: List[Story], rand: np.random.Generator) -> List[StoryLink]:
         raise NotImplementedError
+
+
+class CantFitRampError(ImpossibleWorldError):
+    pass
+
+
+class CantFitLadderError(ImpossibleWorldError):
+    pass
 
 
 @attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
 class DefaultStoryLinker(StoryLinker):
     raise_on_failure: bool = True
+    allow_ramps: bool = True
+    allow_ladders: bool = True
 
-    def link_stories(self, stories: List[Story], rng: Random) -> Tuple[List[Story], List[StoryLink]]:
-        """
-        The rough algorithm for connecting two stories with a ramp:
-        1) Iterate over all bottom story rooms, starting with the biggest bottom one
-        2) Iterate over all top story rooms, starting with nearest to current bottom one
-        3) Calculate:
-            bottom landing mask (which tiles can we place a landing on the bottom floor?)
-            top landing mask
-            ramp mask (basically all tiles except for rooms that we are not connecting and all hallways+landings)
-        4) Iterate tile-by-tile in free bottom landing space
-        5) Iterate over the 4 possible directions
-        6) Try placing the ramp w/ landings: if ramp space and landing spaces are all clear, we can place the ramp!
-        """
+    def link_stories(self, stories: List[Story], rand: np.random.Generator) -> List[StoryLink]:
         links = []
         for bottom_story, top_story in zip(stories[:-1], stories[1:]):
-            link = self.get_story_link(bottom_story, top_story)
-            if not link:
-                continue
+            link = None
+            if self.allow_ramps:
+                try:
+                    link = self.make_ramp(bottom_story, top_story, rand)
+                except CantFitRampError:
+                    pass
+
+            if link is None and self.allow_ladders:
+                link = self.make_ladder(bottom_story, top_story, rand)
+
+            if link is None:
+                if self.raise_on_failure:
+                    raise ImpossibleWorldError(f"Could not link stories {bottom_story.num} and {top_story.num}")
+                else:
+                    continue
             links.append(link)
-            bottom_story.story_links.append(link)
-            top_story.story_links.append(link)
-        return stories, links
+        return links
 
     def try_fit_ramp(
         self,
@@ -573,7 +688,7 @@ class DefaultStoryLinker(StoryLinker):
         if not ramp_space_free:
             return
 
-        # todo: check top landing properly if width > 1
+        # TODO: check top landing properly when doing 1d9f913a-3870-41b0-839e-8b29d0b89983
         if reverse:
             top_landing_coords = z - ramp_block_length + 1, x - ramp_block_width + 1
         else:
@@ -592,17 +707,106 @@ class DefaultStoryLinker(StoryLinker):
         return Ramp(
             bottom_story.num,
             bottom_room.id,
-            Position(x, z),
+            BuildingTile(x, z),
             top_story.num,
             top_room.id,
-            Position(top_landing_coords[1], top_landing_coords[0]),
+            BuildingTile(top_landing_coords[1], top_landing_coords[0]),
             width=1,
         )
 
-    def get_story_link(self, bottom_story: Story, top_story: Story) -> Optional[StoryLink]:
+    def make_ladder(self, bottom_story: Story, top_story: Story, rand: np.random.Generator) -> Optional[Ladder]:
+        azimuths: List[Azimuth] = list(Azimuth)
+        rand.shuffle(azimuths)
+
+        for azimuth in azimuths:
+            bottom_story_free_mask = _get_story_free_mask(bottom_story)
+            top_story_free_mask = _get_story_free_mask(top_story)
+
+            # Ladders require two tiles: the principal tile where the ladder is placed + an adjacent tile one step
+            # backwards from the ladder to make room for the fat player. The azimuth mask tells us if that tile is free
+            backwards_adjacent_tile_kernel = azimuth.convolution_kernel
+            forwards_adjacent_tile_kernel = azimuth.opposite.convolution_kernel
+            # Top story needs a tile forward from ladder to "land" on
+            has_top_landing_tile_mask = convolve(top_story_free_mask, forwards_adjacent_tile_kernel)
+            ladder_site_mask = bottom_story_free_mask & top_story_free_mask
+            # Both stories need a tile backwards as it'll be cut out
+            backwards_adjacent_tile_mask = convolve(ladder_site_mask, backwards_adjacent_tile_kernel)
+            ladder_site_mask &= backwards_adjacent_tile_mask & has_top_landing_tile_mask
+
+            viable_tiles = list(zip(*np.where(ladder_site_mask)))
+            if not viable_tiles:
+                # For narrow buildings, only horizontal or vertical azimuths might work out
+                continue
+
+            ladder_tile = rand.choice(viable_tiles)
+            ladder_position = BuildingTile(x=ladder_tile[1], z=ladder_tile[0])
+
+            top_position = ladder_position
+            if azimuth == Azimuth.NORTH:
+                bottom_position = attr.evolve(top_position, z=top_position.z + 1)
+            elif azimuth == Azimuth.EAST:
+                bottom_position = attr.evolve(top_position, x=top_position.x - 1)
+            elif azimuth == Azimuth.SOUTH:
+                bottom_position = attr.evolve(top_position, z=top_position.z - 1)
+            elif azimuth == Azimuth.WEST:
+                bottom_position = attr.evolve(top_position, x=top_position.x + 1)
+            else:
+                raise SwitchError(f"Unknown azimuth {azimuth}")
+
+            bottom_room = bottom_story.get_room_at_point(bottom_position)
+            top_room = top_story.get_room_at_point(top_position)
+
+            # TODO: 1d9f913a-3870-41b0-839e-8b29d0b89983
+            return Ladder(
+                bottom_story_id=bottom_story.num,
+                bottom_room_id=bottom_room.id,
+                bottom_position=bottom_position,
+                top_story_id=top_story.num,
+                top_room_id=top_room.id,
+                top_position=top_position,
+                width=1,
+                azimuth=azimuth,
+            )
+
+        if not self.raise_on_failure:
+            return None
+        raise CantFitLadderError(
+            "Stories don't have enough overlap to place ladder."
+            "Either something is very wrong or the building is too small"
+        )
+
+    def make_ramp(self, bottom_story: Story, top_story: Story, rand: np.random.Generator) -> Optional[StoryLink]:
+        """
+        The rough algorithm for connecting two stories with a ramp:
+        1) Iterate over all bottom story rooms, starting with the biggest bottom one
+        2) Iterate over all top story rooms, starting with nearest to current bottom one
+        3) Calculate:
+            bottom landing mask (which tiles can we place a landing on the bottom floor?)
+            top landing mask
+            ramp mask (basically all tiles except for rooms that we are not connecting and all hallways+landings)
+        4) Iterate tile-by-tile in free bottom landing space
+        5) Iterate over the 4 possible directions
+        6) Try placing the ramp w/ landings: if ramp space and landing spaces are all clear, we can place the ramp!
+        """
         assert (
             bottom_story.width == top_story.width and bottom_story.length == bottom_story.length
         ), "Different-sized story linking not implemented"
+
+        for bottom_room in sorted(bottom_story.rooms, key=lambda room: room.tiles.size):
+            for top_room in sorted(
+                top_story.rooms, key=lambda top_room: euclidean_distance(top_room.center, bottom_room.center)
+            ):
+                ramp = self._try_link_rooms_by_ramp(bottom_story, top_story, bottom_room, top_room)
+                if ramp is not None:
+                    return ramp
+
+        if not self.raise_on_failure:
+            return None
+        raise CantFitRampError("Building too small to place ramp")
+
+    def _try_link_rooms_by_ramp(
+        self, bottom_story: Story, top_story: Story, bottom_room: Room, top_room: Room
+    ) -> Optional[Ramp]:
         ramp_width = 1
         landing_length = 1
         max_ramp_angle = math.radians(45)
@@ -614,79 +818,62 @@ class DefaultStoryLinker(StoryLinker):
         required_space = (ramp_floor_length + 2 * landing_length, ramp_width)
         ramp_block = np.empty(required_space)
 
-        ramp = None
-        linked = False
-        for bottom_room in sorted(bottom_story.rooms, key=lambda room: room.tiles.size):
-            for top_room in sorted(
-                top_story.rooms, key=lambda top_room: euclidean_distance(top_room.center, bottom_room.center)
-            ):
-                # todo: add margins around hallways & rooms if we care about having enclosed ramps vs free ramps?
-                bottom_room_hallways = [h for h in bottom_story.hallways if h.from_room_id == bottom_room.id]
-                bottom_landing_mask = _get_room_free_mask(
-                    bottom_story.width, bottom_story.length, bottom_room, bottom_room_hallways
-                )
-                top_room_hallways = [h for h in top_story.hallways if h.from_room_id == top_room.id]
-                # todo: add ramps=existing_ramps
-                top_landing_mask = _get_room_free_mask(top_story.width, top_story.length, top_room, top_room_hallways)
-                if not (bottom_landing_mask == 1).any():
-                    continue
-                if not (top_landing_mask == 1).any():
-                    continue
+        bottom_room_hallways = [h for h in bottom_story.hallways if h.from_room_id == bottom_room.id]
+        bottom_landing_mask = _get_room_free_mask(
+            bottom_story.width,
+            bottom_story.length,
+            bottom_room,
+            bottom_room_hallways,
+            bottom_story.story_links,
+        )
+        top_room_hallways = [h for h in top_story.hallways if h.from_room_id == top_room.id]
+        top_landing_mask = _get_room_free_mask(
+            top_story.width, top_story.length, top_room, top_room_hallways, top_story.story_links
+        )
+        if not (bottom_landing_mask == 1).any():
+            return
+        if not (top_landing_mask == 1).any():
+            return
 
-                # free space = ones
-                other_bottom_rooms = [room for room in bottom_story.rooms if room != bottom_room]
-                other_top_rooms = [room for room in top_story.rooms if room != top_room]
-                ramp_mask = _get_ramp_free_mask(
-                    bottom_story.width,
-                    bottom_story.length,
-                    exclude_rooms=[*other_bottom_rooms, *other_top_rooms],
-                    exclude_hallways=[*bottom_story.hallways, *top_story.hallways]
-                    # todo: exclude_story_links=existing_ramps
-                )
+        # free space = ones
+        other_bottom_rooms = [room for room in bottom_story.rooms if room != bottom_room]
+        other_top_rooms = [room for room in top_story.rooms if room != top_room]
+        ramp_mask = _get_ramp_free_mask(
+            bottom_story.width,
+            bottom_story.length,
+            exclude_rooms=[*other_bottom_rooms, *other_top_rooms],
+            exclude_hallways=[*bottom_story.hallways, *top_story.hallways],
+            exclude_story_links=[*bottom_story.story_links, *top_story.story_links],
+        )
 
-                for ramp_block in [ramp_block, ramp_block.T]:
-                    ramp_block_length, ramp_block_width = ramp_block.shape
-                    max_free_length = (ramp_mask == 1).sum(axis=0).max()
-                    max_free_width = (ramp_mask == 1).sum(axis=1).max()
-                    if ramp_block_length > max_free_length or ramp_block_width > max_free_width:
-                        continue
-                    for reverse in [False, True]:
-                        for (z, x), empty in np.ndenumerate(bottom_landing_mask == 1):
-                            ramp = self.try_fit_ramp(
-                                bottom_story,
-                                top_story,
-                                bottom_room,
-                                top_room,
-                                bottom_story_tile_z=z,
-                                bottom_story_tile_x=x,
-                                bottom_story_tile_empty=empty,
-                                ramp_block=ramp_block,
-                                ramp_mask=ramp_mask,
-                                top_landing_mask=top_landing_mask,
-                                reverse=reverse,
-                            )
-                            if not ramp:
-                                continue
-                            linked = True
-                            break
-
-                        # todo: are these breaks an anti-pattern?
-                        if linked:
-                            break
-                    if linked:
-                        break
-                if linked:
-                    break
-            if linked:
-                break
-        if not linked or ramp is None:
-            if not self.raise_on_failure:
-                return None
-            raise RuntimeError("can't place ramp ;_;")
-        return ramp
+        for ramp_block in [ramp_block, ramp_block.T]:
+            ramp_block_length, ramp_block_width = ramp_block.shape
+            max_free_length = (ramp_mask == 1).sum(axis=0).max()
+            max_free_width = (ramp_mask == 1).sum(axis=1).max()
+            if ramp_block_length > max_free_length or ramp_block_width > max_free_width:
+                continue
+            for reverse in [False, True]:
+                for (z, x), empty in np.ndenumerate(bottom_landing_mask == 1):
+                    ramp = self.try_fit_ramp(
+                        bottom_story,
+                        top_story,
+                        bottom_room,
+                        top_room,
+                        bottom_story_tile_z=z,
+                        bottom_story_tile_x=x,
+                        bottom_story_tile_empty=empty,
+                        ramp_block=ramp_block,
+                        ramp_mask=ramp_mask,
+                        top_landing_mask=top_landing_mask,
+                        reverse=reverse,
+                    )
+                    if ramp:
+                        return ramp
 
 
-def _get_room_free_mask(story_width: int, story_length: int, room: Room, hallways: List[Hallway]) -> np.ndarray:
+def _get_room_free_mask(
+    story_width: int, story_length: int, room: Room, hallways: List[Hallway], story_links: List[StoryLink]
+) -> BuildingBoolNP:
     """Returns a mask where ones represent the free space in a room (free of ramps, landings, etc.)"""
     grid = np.zeros((story_length, story_width), dtype=np.float32)
     add_room_tiles_to_grid(room, room.tiles, grid)
@@ -694,12 +881,26 @@ def _get_room_free_mask(story_width: int, story_length: int, room: Room, hallway
     for hallway in hallways:
         grid[hallway.points[0].z, hallway.points[0].x] = 0
         grid[hallway.points[-1].z, hallway.points[-1].x] = 0
+    for story_link in story_links:
+        draw_line_in_grid((story_link.bottom_position, story_link.top_position), grid, 0, include_ends=True)
     return grid
 
 
+def _get_story_free_mask(story: Story) -> BuildingBoolNP:
+    story_free_mask = np.zeros((story.length, story.width), dtype=np.bool_)
+    for room in story.rooms:
+        room_free_mask = _get_room_free_mask(story.width, story.length, room, story.hallways, story.story_links)
+        story_free_mask |= room_free_mask
+    return story_free_mask.astype(np.bool_)
+
+
 def _get_ramp_free_mask(
-    story_width: int, story_length: int, exclude_rooms: List[Room], exclude_hallways: List[Hallway]
-) -> np.ndarray:
+    story_width: int,
+    story_length: int,
+    exclude_rooms: List[Room],
+    exclude_hallways: List[Hallway],
+    exclude_story_links: List[StoryLink],
+) -> BuildingBoolNP:
     """
     Returns a mask where ones represent the free space for building a ramp across multiple floors
     """
@@ -708,6 +909,10 @@ def _get_ramp_free_mask(
         add_room_tiles_to_grid(room, room.tiles, grid)
     for hallway in exclude_hallways:
         draw_line_in_grid(hallway.points, grid, TileIdentity.HALLWAY.value, include_ends=True)
+    for story_link in exclude_story_links:
+        draw_line_in_grid(
+            (story_link.bottom_position, story_link.top_position), grid, TileIdentity.LINK.value, include_ends=True
+        )
     return np.invert(grid.astype(bool))
 
 
@@ -719,78 +924,23 @@ class ObstacleSite(NamedTuple):
     vertical: bool
 
 
-@attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
-class ObstacleBuilder:
-    obstacle_count: Dict[Type[Obstacle], int]
-
-    # todo: move out of class?
-    @staticmethod
-    def get_free_sites(stories: List[Story]) -> List[ObstacleSite]:
-        options = []
-        for story in stories:
-            for room in story.rooms:
-                # todo: width > 1
-                # Place obstacle anywhere there's a free vertical/horizontal, possibly in front of hallway joints
-                global_room_free_mask = _get_room_free_mask(story.width, story.length, room, hallways=[])
-                local_room_free_mask = global_room_free_mask[
-                    room.z_range.min_ge : room.z_range.max_lt, room.x_range.min_ge : room.x_range.max_lt
-                ]
-                free_vertical_idxs = only(np.where((local_room_free_mask == 1).all(axis=0)))
-                options.extend(
-                    [ObstacleSite(story.num, room.id, idx, room.length, True) for idx in free_vertical_idxs]
-                )
-                free_horizontal_idxs = only(np.where((local_room_free_mask == 1).all(axis=1)))
-                options.extend(
-                    [ObstacleSite(story.num, room.id, idx, room.width, False) for idx in free_horizontal_idxs]
-                )
-        return options
-
-    @staticmethod
-    def apply(stories: List[Story], obstacles: List[Obstacle]) -> None:
-        for obstacle in obstacles:
-            if isinstance(obstacle, Wall) or isinstance(obstacle, FloorChasm):
-                if isinstance(obstacle, Wall):
-                    height = obstacle.height
-                else:
-                    height = -1
-                room: Room = stories[obstacle.story_id].rooms[obstacle.room_id]
-                new_heightmap = room.floor_heightmap.copy()
-                draw_line_in_grid(obstacle.points, new_heightmap, height)
-                deformed_room = room.with_heightmap(new_heightmap)
-                stories[obstacle.story_id].rooms[obstacle.room_id] = deformed_room
-            else:
-                raise SwitchError(obstacle)
-
-    def generate(self, stories: List[Story], rand: np.random.Generator) -> List[Obstacle]:
-        all_obstacles = []
-        for obstacle_type, count in self.obstacle_count.items():
-            for _ in range(count):
-                free_sites = self.get_free_sites(stories)
-                site_idx = rand.choice(np.array(range(len(free_sites))), replace=False)
-                site = free_sites[site_idx]
-                story_num, room_id, idx, distance, vertical = site
-                if vertical:
-                    points = [Position(x=idx, z=0), Position(x=idx, z=distance - 1)]
-                else:
-                    points = [Position(x=0, z=idx), Position(x=distance - 1, z=idx)]
-                if issubclass(obstacle_type, Wall):
-                    height = round(max(MAX_JUMP_HEIGHT_METERS / 1, rand.random() * MAX_JUMP_HEIGHT_METERS), 1)
-                    obstacle = Wall(story_num, room_id, points, 1, height)
-                elif issubclass(obstacle_type, FloorChasm):
-                    obstacle = FloorChasm(story_num, room_id, points, 1)
-                else:
-                    raise SwitchError(obstacle_type)
-                all_obstacles.append(obstacle)
-        return all_obstacles
-
-
-@attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
-class CustomObstacleBuilder(ObstacleBuilder):
-    obstacle_count = np.nan
-    generate_obstacles: Callable[[List[Story], np.random.Generator], List[Obstacle]]
-
-    def generate(self, stories: List[Story], rand: np.random.Generator) -> List[Obstacle]:
-        return self.generate_obstacles(stories, rand)
+def get_free_obstacle_sites(stories: List[Story]) -> List[ObstacleSite]:
+    options = []
+    for story in stories:
+        for room in story.rooms:
+            # TODO (1d9f913a-3870-41b0-839e-8b29d0b89983): support sites with width > 1
+            # Gets all free verticals/horizontals, possibly in front of hallway joints
+            global_room_free_mask = _get_room_free_mask(
+                story.width, story.length, room, hallways=[], story_links=story.story_links
+            )
+            local_room_free_mask = global_room_free_mask[
+                room.z_range.min_ge : room.z_range.max_lt, room.x_range.min_ge : room.x_range.max_lt
+            ]
+            free_vertical_idxs = only(np.where((local_room_free_mask == 1).all(axis=0)))
+            options.extend([ObstacleSite(story.num, room.id, idx, room.length, True) for idx in free_vertical_idxs])
+            free_horizontal_idxs = only(np.where((local_room_free_mask == 1).all(axis=1)))
+            options.extend([ObstacleSite(story.num, room.id, idx, room.width, False) for idx in free_horizontal_idxs])
+    return options
 
 
 @attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
@@ -806,6 +956,7 @@ class DefaultEntranceBuilder(EntranceBuilder):
 
     def build(self, stories: List[Story], rand: np.random.Generator) -> List[Story]:
         if self.top:
+            # TODO: 8451efda-5f27-4ea3-a1d3-cde7f84f652c
             # self.add_entrance_ramp(stories[-1], rand)
             raise NotImplementedError
         if self.bottom:
@@ -828,19 +979,24 @@ class DefaultEntranceBuilder(EntranceBuilder):
         return entrance
 
     def remove_windows_in_way_of_entrance(self, story: Story, entrance: Entrance) -> None:
-        entrance_points_in_outline = entrance.get_points_in_story_outline(story)
-        for entry_z, entry_x in entrance_points_in_outline:
+        entrance_points_in_outline = set(entrance.get_points_in_story_outline(story))
+        adjacent_points = set()
+        for point in entrance_points_in_outline:
+            adjacent_points.update(get_neighbor_tiles(story.get_outline_mask(), point, only_if_equals=True))
+        entrance_points_in_outline.update(adjacent_points)
+
+        for entry_z, entry_x in sorted(list(entrance_points_in_outline)):
             window_idxs_to_remove = []
             for i, window in enumerate(story.windows):
                 window_x, _, window_z = window.position
-                window_x_range = NewRange(
+                window_x_range = IntRange(
                     window.position[0] - window.size[0] / 2, window.position[0] + window.size[0] / 2
                 )
-                window_z_range = NewRange(
+                window_z_range = IntRange(
                     window.position[2] - window.size[2] / 2, window.position[2] + window.size[2] / 2
                 )
-                entry_tile_x_range = NewRange(entry_x, entry_x + 1)
-                entry_tile_z_range = NewRange(entry_z, entry_z + 1)
+                entry_tile_x_range = IntRange(entry_x, entry_x + 1)
+                entry_tile_z_range = IntRange(entry_z, entry_z + 1)
                 if entry_tile_x_range.overlap(window_x_range) and entry_tile_z_range.overlap(window_z_range):
                     window_idxs_to_remove.append(i)
             for idx in sorted(window_idxs_to_remove, reverse=True):
@@ -854,71 +1010,58 @@ class DefaultEntranceBuilder(EntranceBuilder):
         permitted_azimuths: Optional[List[Azimuth]] = None,
     ) -> Entrance:
         permitted_azimuths = list(Azimuth) if permitted_azimuths is None else permitted_azimuths
-        exterior_space_by_azimuth = {
-            Azimuth.NORTH: Room(-1, Position(0, -1), story.width, 1, 0),  # top
-            Azimuth.SOUTH: Room(-2, Position(0, story.length), story.width, 1, 0),  # bottom
-            Azimuth.WEST: Room(-3, Position(-1, 0), 1, story.length, 0),  # left
-            Azimuth.EAST: Room(-4, Position(story.width + 1, 0), 1, story.length, 0),  # right
-        }
+        tiles: np.ndarray = story.generate_tiles(include_hallway_landings=True)
+        room_id_tiles = story.generate_room_id_tiles()
+        outline_mask = story.get_outline_mask()
+        is_tile_free = tiles == TileIdentity.ROOM.value
 
-        exterior_wall_azimuths_by_room_id = story.get_exterior_wall_azimuths_by_room_id()
-
-        closest_distance = np.inf
+        # Find all possible story outline tiles that are not blocked
+        # To do this, we create a fitting mask, where all free tiles are 1s (is_tile_free) and where the outline
+        # is an arbitrary number other than 1.
+        arbitrary_multiplier = 9
+        fitting_mask = outline_mask.astype(np.int_) * arbitrary_multiplier + is_tile_free.astype(int)
         viable_connections = []
-        for room in story.rooms:
-            if room.id not in permitted_room_ids:
+        for wall_type in WallType:
+            azimuth = wall_type.azimuth
+            if azimuth not in permitted_azimuths:
                 continue
 
-            viable_azimuths = set(exterior_wall_azimuths_by_room_id[room.id]).intersection(permitted_azimuths)
-            if len(viable_azimuths) == 0:
-                continue
-            azimuth = rand.choice(list(viable_azimuths))
+            # To check if a tile is suitable, we check that it is free (is_tile_free) AND that it  has an outline wall
+            # of the desired azimuth as a neighbor (through the convolution with the wall kernel).
+            # The expected mask value is 3 * arbitrary multiplier, since the wall kernels are all 1s on the wall side.
+            kernel = wall_type.convolution_kernel
+            assert kernel.shape[0] == kernel.shape[1]
+            kernel_size = kernel.shape[0]
+            is_suitable_entrance_site = is_tile_free.astype(int) & (
+                convolve(fitting_mask, kernel, mode="constant") == kernel_size * arbitrary_multiplier
+            )
+            suitable_tiles = list(zip(*np.where(is_suitable_entrance_site == True)))
+            for tile in suitable_tiles:
+                interior_point = BuildingTile(z=tile[0], x=tile[1])
+                room_id = room_id_tiles[interior_point.z, interior_point.x]
+                if permitted_room_ids is not None and room_id not in permitted_room_ids:
+                    continue
 
-            exterior_space = exterior_space_by_azimuth[azimuth]
-            overlap_x, overlap_z = get_room_overlap(exterior_space, room)
-            if overlap_x:
-                overlap_midpoint = overlap_x.min_ge + (overlap_x.max_lt - overlap_x.min_ge) // 2
-                exterior_space_bottom = exterior_space.position.z + exterior_space.length
-                room_bottom = room.position.z + room.length
-                top_point_z = min(exterior_space_bottom, room_bottom)
-                bottom_point_z = max(exterior_space.position.z, room.position.z)
-                start = Position(x=overlap_midpoint, z=top_point_z - 1)
-                end = Position(x=overlap_midpoint, z=bottom_point_z)
-                if top_point_z == exterior_space_bottom:
-                    points = [start, end]
+                if wall_type == WallType.NORTH:
+                    exterior_point = BuildingTile(z=interior_point.z - 2, x=interior_point.x)
+                elif wall_type == WallType.EAST:
+                    exterior_point = BuildingTile(z=interior_point.z, x=interior_point.x + 2)
+                elif wall_type == WallType.SOUTH:
+                    exterior_point = BuildingTile(z=interior_point.z + 2, x=interior_point.x)
+                elif wall_type == WallType.WEST:
+                    exterior_point = BuildingTile(z=interior_point.z, x=interior_point.x - 2)
                 else:
-                    points = [end, start]
-                distance_to_exterior = bottom_point_z - top_point_z
-            elif overlap_z:
-                overlap_midpoint = overlap_z.min_ge + (overlap_z.max_lt - overlap_z.min_ge) // 2
-                exterior_space_right = exterior_space.position.x + exterior_space.width
-                room_right = room.position.x + room.width
-                left_point_x = min(exterior_space_right, room_right)
-                right_point_x = max(exterior_space.position.x, room.position.x)
-                start = Position(x=left_point_x - 1, z=overlap_midpoint)
-                end = Position(x=right_point_x, z=overlap_midpoint)
-                if left_point_x == exterior_space_right:
-                    points = [start, end]
-                else:
-                    points = [end, start]
-                distance_to_exterior = right_point_x - left_point_x
-            else:
-                continue
+                    raise SwitchError("Unexpected wall type")
 
-            if distance_to_exterior <= closest_distance:
-                connection = (room, azimuth, points)
-                if distance_to_exterior == closest_distance:
-                    viable_connections.append(connection)
-                else:
-                    viable_connections = [connection]
-                closest_distance = distance_to_exterior
+                viable_connections.append((room_id, azimuth, (exterior_point, interior_point)))
 
-        # todo: width > 1
-        assert len(viable_connections) > 0, f"Can't build entryway to any room ({permitted_room_ids=})"
+        # TODO: 1d9f913a-3870-41b0-839e-8b29d0b89983
+        if len(viable_connections) == 0:
+            raise ImpossibleWorldError(f"Can't build entryway to any room ({permitted_room_ids=})")
         connection_idx = rand.choice(list(range(len(viable_connections))))
-        room_to_connect, azimuth, hallway_points = viable_connections[connection_idx]
+        connected_room_id, azimuth, hallway_points = viable_connections[connection_idx]
 
-        return Entrance(story.num, room_to_connect.id, azimuth, hallway_points, width=1)
+        return Entrance(story.num, connected_room_id, azimuth, hallway_points, width=1)
 
 
 @attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
@@ -934,7 +1077,12 @@ class WindowBuilder:
             for hallway in story.hallways:
                 draw_line_in_grid(hallway.points, no_build_mask, TileIdentity.HALLWAY.value, include_ends=False)
             for link in story.story_links:
-                set_link_in_grid(link, no_build_mask, bottom=True)
+                set_link_in_grid(
+                    link,
+                    no_build_mask,
+                    set_bottom_landing=link.bottom_story_id == story.num,
+                    set_top_landing=link.top_story_id == story.num,
+                )
             no_build_mask = no_build_mask.astype(np.bool_)
 
             wall_footprints = find_exterior_wall_footprints(story.footprint, no_build_mask=no_build_mask)

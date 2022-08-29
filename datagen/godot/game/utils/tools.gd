@@ -243,8 +243,7 @@ static func file_create(current_path: String) -> String:
 
 
 static func get_delta_quaternion(old: Transform, new: Transform) -> Quat:
-	var quat = new.basis.get_rotation_quat() * old.basis.get_rotation_quat().inverse()
-	return quat.normalized()
+	return new.basis.get_rotation_quat() * old.basis.get_rotation_quat().inverse()
 
 
 static func get_move_delta_position(basis: Basis, delta_position: Vector3) -> Vector3:
@@ -311,15 +310,13 @@ static func get_new_hand_position_while_climbing(
 	return new_hand_position_relative_to_head + head_position
 
 
-# TODO rename things, add delta in here, etc ...
-# TODO why does this work but the get_euler() method doesn't?
-#	The following does not work:
+#	NOTE: The following does not work
 #	physical_head.angular_velocity = (
 #		(target_head.global_transform.basis.get_rotation_quat() * physical_head.global_transform.basis.get_rotation_quat().inverse()).get_euler()
 #		/ delta
 #	)
+#	so we stole this implementation from somewhere on the internet: https://www.reddit.com/r/godot/comments/q1lawy/basis_and_angular_velocity_question/
 static func calc_angular_velocity_from_basis(from_basis: Basis, to_basis: Basis) -> Vector3:
-	# See https://www.reddit.com/r/godot/comments/q1lawy/basis_and_angular_velocity_question/
 	var q1 = from_basis.get_rotation_quat()
 	var q2 = to_basis.get_rotation_quat()
 

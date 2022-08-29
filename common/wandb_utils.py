@@ -1,13 +1,17 @@
 import os
 import re
+from pathlib import Path
 from typing import Any
 from typing import List
+from typing import Optional
 
 import pytorch_lightning
 import torch
 import wandb
 from loguru import logger
 from torch import Tensor
+
+from agent.evaluation import EVAL_TEMP_PATH
 
 WANDB_ORGANIZATION = "sourceress"
 
@@ -91,3 +95,26 @@ def log_histogram(trainer: pytorch_lightning.Trainer, tag: str, value: Tensor, f
     if type(value) == torch.Tensor:
         value = value.cpu().detach()
     trainer.logger.experiment.log({tag: value}, step=trainer.global_step)
+
+
+def load_checkpoint_from_wandb_run(run_path: str, filename: str) -> str:
+    api = wandb.Api()
+    run = api.run(run_path)
+    run_root = Path(EVAL_TEMP_PATH) / run_path
+    os.makedirs(run_root, exist_ok=True)
+    bones_checkpoint_path = wandb.restore(filename, run_path=run_path, replace=True, root=str(run_root))
+    assert bones_checkpoint_path is not None, "Could not load checkpoint"
+    return bones_checkpoint_path.name
+
+
+def get_latest_checkpoint_filename(run_path: str, prefix="", suffix="") -> Optional[str]:
+    api = wandb.Api()
+    run = api.run(run_path)
+    checkpoint_filenames = [
+        file.name for file in run.files() if file.name.startswith(prefix) and file.name.endswith(suffix)
+    ]
+    checkpoint_filenames = sorted(checkpoint_filenames, key=lambda x: int(x[len(prefix) : -len(suffix)]))
+    if len(checkpoint_filenames) == 0:
+        return None
+
+    return checkpoint_filenames[-1]

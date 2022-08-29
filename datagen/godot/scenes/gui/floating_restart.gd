@@ -31,7 +31,7 @@ func read_input_from_event(event: InputEvent) -> void:
 			is_close_pressed = true
 
 	# just reset without the menu when using mouse and keyboard
-	if Globals.is_player_using_mouse_keyboard_controls and event.is_action_pressed("reset"):
+	if Globals.is_player_using_mouse_keyboard_controls() and event.is_action_pressed("reset"):
 		is_opened = true
 		is_restart_pressed = true
 

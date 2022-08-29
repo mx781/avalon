@@ -30,7 +30,7 @@ from torch import multiprocessing as mp
 from torch import nn
 from torch.nn import functional as F
 
-from agent.godot_gym import AvalonGodotEnvWrapper
+from agent.godot.godot_gym import AvalonGodotEnvWrapper
 from agent.torchbeast import atari_wrappers
 from agent.torchbeast import avalon_helpers
 from agent.torchbeast.atari_wrappers import WarpFrame
@@ -656,7 +656,7 @@ Net = AtariNet
 def create_env(flags):
     if flags.env == "godot":
         seed = _randint_of_size(np.uint32)
-        config = dict(random_int=seed, max_frames=100)
+        config = dict(random_int=seed, time_limit=100)
         env = AvalonGodotEnvWrapper(config)
         env = WarpFrame(env, grayscale=False, dict_space_key="rgb")
         env = FlattenAction(env)

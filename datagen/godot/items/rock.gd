@@ -46,7 +46,7 @@ func get_inflicted_damage(target_velocity: Vector3) -> float:
 	if not is_dangerous():
 		return 0.0
 
-	var impact_magnitude = (linear_velocity - target_velocity).length()
+	var impact_magnitude = _calculate_impact_magnitude(target_velocity)
 	if impact_magnitude < relative_impact_velocity_threshold:
 		if HARD.mode():
 			var impact_desc = "(%s < %s)" % [impact_magnitude, relative_impact_velocity_threshold]

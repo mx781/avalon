@@ -41,4 +41,4 @@ shape = SubResource( 4 )
 
 [node name="climbing_ray" type="RayCast" parent="movement_controller" index="2"]
 enabled = true
-cast_to = Vector3( 0, 0, -3.313 )
+cast_to = Vector3( 0, 0, -5.25 )

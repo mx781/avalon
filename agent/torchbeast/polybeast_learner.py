@@ -15,6 +15,8 @@
 import argparse
 import collections
 import os
+import random
+import tarfile
 import threading
 import time
 import timeit
@@ -26,6 +28,7 @@ from typing import Dict
 from typing import Set
 
 import numpy as np
+import sentry_sdk
 import torch
 import wandb
 from gym import spaces
@@ -34,24 +37,29 @@ from torch.nn import functional as F
 
 import libtorchbeast
 import nest
-from agent.observation_model import ImpalaConvNet
+from agent.godot.godot_gym import CURRICULUM_BASE_PATH
+from agent.ppo.observation_model import ImpalaConvNet
 from agent.torchbeast.avalon_helpers import IS_PROPRIOCEPTION_USED
 from agent.torchbeast.avalon_helpers import PROPRIOCEPTION_ROW_COUNT
+from agent.torchbeast.avalon_helpers import TORCHBEAST_ENV_LOGS_PATH
 from agent.torchbeast.avalon_helpers import compute_policy_gradient_loss_from_dist
 from agent.torchbeast.avalon_helpers import create_godot_env
 from agent.torchbeast.avalon_helpers import flatten_tensor
 from agent.torchbeast.avalon_helpers import force_cudnn_initialization
+from agent.torchbeast.avalon_helpers import get_avalon_test_scores
 from agent.torchbeast.avalon_helpers import get_dict_action_space
+from agent.torchbeast.avalon_helpers import get_goal_progress_files
+from agent.torchbeast.avalon_helpers import get_num_test_worlds_from_flags
 from agent.torchbeast.avalon_helpers import godot_config_from_flags
 from agent.torchbeast.avalon_helpers import obs_to_frame
 from agent.torchbeast.avalon_helpers import obs_to_proprioception
 from agent.torchbeast.avalon_helpers import unflatten_tensor
 from agent.torchbeast.avalon_helpers import vtrace_from_dist
-from agent.torchbeast.core import file_writer
 from agent.torchbeast.core.environment import Environment
 from agent.torchbeast.model import DictActionHead
 from common.log_utils import logger
 from common.visual_utils import get_path_to_video_png
+from common.wandb_utils import get_latest_checkpoint_filename
 from datagen.godot_env import GODOT_ERROR_LOG_PATH
 
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -79,7 +87,7 @@ parser.add_argument("--disable_checkpoint", action="store_true",
                     help="Disable saving checkpoint.")
 parser.add_argument("--savedir", default="~/torchbeast",
                     help="Root dir where experiment data will be saved.")
-parser.add_argument("--num_actors", default=10, type=int, metavar="N",
+parser.add_argument("--num_actors", default=4, type=int, metavar="N",
                     help="Number of actors.")
 parser.add_argument("--total_steps", default=50_000_000, type=int, metavar="T",
                     help="Total environment steps to train for.")
@@ -133,11 +141,17 @@ parser.add_argument("--logging_rate", default=15, type=float,
                     help="Logging rate in seconds.")
 parser.add_argument("--checkpoint_rate", default=15, type=float,
                     help="Validation/checkpointing rate in minutes.")
-parser.add_argument("--val_episodes_per_task", default=6, type=int,
-                    help="Number of validation episodes.")
 parser.add_argument("--test_episodes_per_task", default=51, type=int,
                     help="Number of validation episodes.")
+parser.add_argument("--save_test_videos", action="store_true",
+                    help="Save videos of test rollouts")
 # yapf: enable
+
+
+def _set_seed(seed):
+    torch.manual_seed(seed)
+    random.seed(seed)
+    np.random.seed(seed)
 
 
 def compute_baseline_loss(advantages):
@@ -213,7 +227,7 @@ class Net(nn.Module):
             x_prop = obs_to_proprioception(inputs["frame"])
             x_prop = torch.flatten(x_prop, 0, 1)  # Merge time and batch.
             x_prop = x_prop.float() / 255.0 - 0.5
-            x += self.prop_fc(x_prop)
+            x = x + self.prop_fc(x_prop)
 
         clipped_reward = torch.clamp(inputs["reward"], -1, 1).view(T * B, 1)
         core_input = torch.cat([x, clipped_reward], dim=-1)
@@ -280,11 +294,13 @@ def learn(
     optimizer,
     scheduler,
     stats,
-    plogger,
     lock=threading.Lock(),
 ):
     model.train()
     for tensors in learner_queue:
+        if flags.mode != "train":
+            continue
+
         tensors = nest.map(lambda t: t.to(flags.learner_device), tensors)
 
         batch, initial_agent_state = tensors
@@ -358,8 +374,6 @@ def learn(
 
         stats["learner_queue_size"] = learner_queue.size()
 
-        plogger.log(stats)
-
         if not len(episode_returns):
             # Hide the mean-of-empty-tuple NaN as it scares people.
             stats["mean_episode_return"] = None
@@ -368,41 +382,47 @@ def learn(
 
 
 @torch.no_grad()
-def run_test(env: Environment, model: Net, num_episodes: int, log_prefix="", is_video_logged=True):
+def run_test(env: Environment, model: Net, num_episodes: int, log_prefix="", is_video_logged=True, seed: int = 0):
     force_cudnn_initialization()
+    _set_seed(seed)
+
     # DO ROLLOUTS
     observation = env.initial()
     core_state = model.initial_state(batch_size=1)
     core_state = nest.map(lambda t: t.to("cuda:0"), core_state)
     episodes = []
-    episode = [observation]
+
+    def get_obs_to_log(observation):
+        return {k: v for k, v in observation.items() if k != "frame" or is_video_logged}
+
+    episode = [get_obs_to_log(observation)]
     while len(episodes) < num_episodes:
         (flat_action, policy_logits, baseline), core_state = model(observation, core_state)
         observation = env.step(flat_action)
-        episode.append(observation)
+        episode.append(get_obs_to_log(observation))
         if observation["done"].item():
             episodes.append(episode)
-            episode = [observation]
+            episode = [get_obs_to_log(observation)]
 
     # GET ROLLOUT STATS
-    successes = defaultdict(lambda: defaultdict(list))
+    results_by_task = defaultdict(lambda: defaultdict(list))
     log_data: Dict[str, Any] = {}
     keys = ["success"]
-    seen_videos: Set[int] = set()
+    seen_episodes: Set[int] = set()
     for episode in episodes:
-        video_id = episode[-1]["info"]["video_id"]
-        if video_id in seen_videos:
-            # We overgenerate videos, don't count them twice!
+        episode_id = episode[-1]["info"]["episode_id"]
+        if episode_id in seen_episodes:
+            # We overgenerate episodes, don't count them twice!
             continue
         else:
-            seen_videos.add(video_id)
+            seen_episodes.add(episode_id)
 
         task = episode[-1]["info"]["task"].lower()
         difficulty = episode[-1]["info"]["difficulty"]
         for field in keys:
-            successes[task][f"final_{field}"].append(episode[-1]["info"][field])
-        successes[task]["episode_length"].append(episode[-1]["episode_step"].item())
-        successes[task]["episode_reward"].append(episode[-1]["episode_return"].item())
+            results_by_task[task][f"final_{field}"].append(episode[-1]["info"][field])
+        results_by_task[task]["episode_length"].append(episode[-1]["episode_step"].item())
+        results_by_task[task]["episode_reward"].append(episode[-1]["episode_return"].item())
         if is_video_logged:
             # final_frame is white for success and black for failure
             final_frame = (
@@ -412,10 +432,10 @@ def run_test(env: Environment, model: Net, num_episodes: int, log_prefix="", is_
                 [obs_to_frame(step["frame"])[..., :3, :, :] / 255.0 for step in episode[:-1]] + [final_frame], dim=0
             ).squeeze(1)
             video_png_path = get_path_to_video_png(video_tensor, normalize=False)
-            log_data[f"{log_prefix}{task}/video_{video_id}_diff_{difficulty:3g}"] = wandb.Image(video_png_path)
+            log_data[f"{log_prefix}{task}/video_{episode_id}_diff_{difficulty:3g}"] = wandb.Image(video_png_path)
 
     # AGGREGATE ROLLOUT STATS
-    for task, x in successes.items():
+    for task, x in results_by_task.items():
         for field, y in x.items():
             log_data[f"{log_prefix}{task}/{field}"] = np.mean(y)
         log_data[f"{log_prefix}{task}/num_episodes"] = len(y)
@@ -424,30 +444,6 @@ def run_test(env: Environment, model: Net, num_episodes: int, log_prefix="", is_
 
 
 def train(flags):
-    name = os.environ.get("EXPERIMENT_NAME", flags.env)
-    wandb.init(config=flags, project=flags.project, name=name)
-    os.makedirs(GODOT_ERROR_LOG_PATH, exist_ok=True)
-    wandb.save(
-        f"{GODOT_ERROR_LOG_PATH}/*", base_path=GODOT_ERROR_LOG_PATH
-    )  # Should watch for anything here and upload immediately?
-
-    if flags.xpid is None:
-        flags.xpid = "torchbeast-%s" % time.strftime("%Y%m%d-%H%M%S")
-    plogger = file_writer.FileWriter(xpid=flags.xpid, xp_args=flags.__dict__, rootdir=flags.savedir)
-
-    if not flags.disable_cuda and torch.cuda.is_available():
-        logger.info("Using CUDA.")
-        flags.learner_device = torch.device("cuda:0")
-        actor_device_index = "1" if torch.cuda.device_count() > 1 else "0"
-        flags.actor_device = torch.device(f"cuda:{actor_device_index}")
-    else:
-        logger.info("Not using CUDA.")
-        flags.learner_device = torch.device("cpu")
-        flags.actor_device = torch.device("cpu")
-
-    if flags.max_learner_queue_size is None:
-        flags.max_learner_queue_size = flags.batch_size
-
     # The queue the learner threads will get their data from.
     # Setting `minimum_batch_size == maximum_batch_size`
     # makes the batch size static.
@@ -482,9 +478,6 @@ def train(flags):
 
     model = Net(num_actions=flags.num_actions, use_lstm=flags.use_lstm)
     model = model.to(device=flags.learner_device)
-
-    eval_model = Net(num_actions=flags.num_actions, use_lstm=flags.use_lstm)
-    eval_model = eval_model.to(device=flags.learner_device)
 
     actor_model = Net(num_actions=flags.num_actions, use_lstm=flags.use_lstm)
     actor_model.to(device=flags.actor_device)
@@ -524,14 +517,17 @@ def train(flags):
 
     stats = {}
 
-    # Load state from a checkpoint, if possible.
-    # if os.path.exists(checkpointpath):
-    #     checkpoint_states = torch.load(checkpointpath, map_location=flags.learner_device)
-    #     model.load_state_dict(checkpoint_states["model_state_dict"])
-    #     optimizer.load_state_dict(checkpoint_states["optimizer_state_dict"])
-    #     scheduler.load_state_dict(checkpoint_states["scheduler_state_dict"])
-    #     stats = checkpoint_states["stats"]
-    #     logger.info(f"Resuming preempted job, current stats:\n{stats}")
+    # Load state from a checkpoint, if it exists.
+    latest_checkpoint = get_latest_checkpoint_filename(wandb.run.path, prefix="model_step_", suffix=".tar")
+    if latest_checkpoint is not None:
+        checkpoint = wandb.restore(latest_checkpoint, run_path=wandb.run.path, replace=True)
+        checkpoint_states = torch.load(checkpoint.name, map_location=flags.learner_device)
+
+        model.load_state_dict(checkpoint_states["model_state_dict"])
+        optimizer.load_state_dict(checkpoint_states["optimizer_state_dict"])
+        scheduler.load_state_dict(checkpoint_states["scheduler_state_dict"])
+        stats = checkpoint_states["stats"]
+        logger.info(f"Resuming preempted job, current stats:\n{stats}")
 
     # Initialize actor model like learner model.
     actor_model.load_state_dict(model.state_dict())
@@ -548,7 +544,6 @@ def train(flags):
                 optimizer,
                 scheduler,
                 stats,
-                plogger,
             ),
         )
         for i in range(flags.num_learner_threads)
@@ -561,6 +556,10 @@ def train(flags):
         )
         for i in range(flags.num_inference_threads)
     ]
+    if flags.mode == "test":
+        num_test_worlds = get_num_test_worlds_from_flags(flags)
+    else:
+        num_test_worlds = 0
 
     actorpool_thread.start()
     for t in learner_threads + inference_threads:
@@ -582,61 +581,80 @@ def train(flags):
             checkpointpath,
         )
         wandb.save(str(checkpointpath), policy="now")
+        wandb.save(str(CURRICULUM_BASE_PATH / "*"), policy="now", base_path=str(CURRICULUM_BASE_PATH.parent))
 
-    if flags.is_validating_during_training:
-        val_env_config = godot_config_from_flags(
-            flags, random_int=1000, is_fixed_generator=True, num_fixed_worlds_per_task=flags.val_episodes_per_task
-        )
-        val_env = Environment(create_godot_env(val_env_config))
-
+    test_data = {}
     try:
         last_validation_time = timeit.default_timer()
         last_sample_time = timeit.default_timer()
         while True:
             start_time = timeit.default_timer()
             start_step = stats.get("step", 0)
-            if start_step >= flags.total_steps:
+            if flags.mode == "train" and start_step >= flags.total_steps:
                 break
             time.sleep(flags.logging_rate)
             end_step = stats.get("step", 0)
 
-            log_data = stats.copy()
-            if timeit.default_timer() - last_validation_time > 60 * flags.checkpoint_rate:
-                # match up checkpoints with validation, run every checkpoint_rate
-                checkpoint(end_step)
-                last_validation_time = timeit.default_timer()
-                if flags.is_validating_during_training:
-                    eval_model.load_state_dict(model.state_dict())
-                    try:
-                        val_data = run_test(
-                            val_env,
-                            eval_model,
-                            flags.val_episodes_per_task * val_env.gym_env.num_tasks,
-                            log_prefix="val/",
-                            is_video_logged=True,
-                        )
-                        log_data.update(val_data)
-                    except Exception as e:
-                        logger.error(f"Validation failed with exception {e}; exiting training!")
-                        break
+            if flags.mode == "train":
+                log_data = stats.copy()
+                if (
+                    flags.checkpoint_rate > 0
+                    and timeit.default_timer() - last_validation_time > 60 * flags.checkpoint_rate
+                ):
+                    # match up checkpoints with validation, run every checkpoint_rate
+                    checkpoint(end_step)
+                    last_validation_time = timeit.default_timer()
+                logger.info(
+                    f"Step {end_step} @ {(end_step - start_step) / (timeit.default_timer() - start_time):.1f} SPS. "
+                    f"Inference batcher size: {inference_batcher.size()}. Learner queue size: {learner_queue.size()}."
+                    f" Other stats: {stats}"
+                )
+                wandb.log(log_data)
 
-            logger.info(
-                f"Step {end_step} @ {(end_step - start_step) / (timeit.default_timer() - start_time):.1f} SPS. "
-                f"Inference batcher size: {inference_batcher.size()}. Learner queue size: {learner_queue.size()}."
-                f" Other stats: {stats}"
-            )
-            wandb.log(log_data)
-            if end_step > start_step:
-                last_sample_time = timeit.default_timer()
-            elif timeit.default_timer() - last_sample_time > 600:
-                logger.warning("No samples for 10 minutes! Exiting training!")
-                break
+                if end_step > start_step:
+                    last_sample_time = timeit.default_timer()
+                elif timeit.default_timer() - last_sample_time > 600:
+                    logger.warning("No samples for 10 minutes! Exiting training!")
+                    break
+            else:
+                num_goal_progress_files = len(get_goal_progress_files())
+                logger.info(f"{num_goal_progress_files} of {num_test_worlds} test worlds completed")
+                # aggressively trying to get these uploaded...
+                error_logs = list(Path(GODOT_ERROR_LOG_PATH).glob("*.tar"))
+                if len(error_logs) > 0:
+                    logger.error(f"Godot errors detected! Uploading and quitting: {error_logs}")
+                    for error_log in error_logs:
+                        wandb.save(str(error_log), base_path=GODOT_ERROR_LOG_PATH, policy="now")
+                    break
+                if num_goal_progress_files >= num_test_worlds:
+                    break
     except KeyboardInterrupt:
         pass  # Close properly.
     else:
         step = stats["step"]
-        logger.info(f"Learning finished after {step} steps. Checkpointing.")
-        checkpoint(step)
+        if flags.mode == "train":
+            logger.info(f"Learning finished after {step} steps. Checkpointing.")
+            test_data = stats
+            checkpoint(step)
+        else:
+            logger.info(f"Testing finished! Collecting scores...")
+            test_data = get_avalon_test_scores()
+            test_data["step"] = step
+            wandb.log(test_data)
+
+            test_data["config/total_steps"] = flags.total_steps
+            logger.info(BIG_SEPARATOR)
+            logger.info(RESULT_TAG)
+            logger.info(test_data)
+            logger.info(BIG_SEPARATOR)
+            if flags.save_test_videos:
+                for log_dir in TORCHBEAST_ENV_LOGS_PATH.glob("*"):
+                    if not log_dir.is_dir():
+                        continue
+                    tar_path = log_dir.with_suffix(".tar.gz")
+                    with tarfile.open(tar_path, "w:gz") as tar:
+                        tar.add(log_dir, arcname=TORCHBEAST_ENV_LOGS_PATH)
+                    wandb.save(str(tar_path), base_path=str(TORCHBEAST_ENV_LOGS_PATH), policy="now")
 
     # Done with learning. Stop all the ongoing work.
     logger.info("Closing queues and joining threads")
@@ -647,18 +665,31 @@ def train(flags):
         t.join()
     logger.info("Learning cleaned up.")
 
+    return test_data
+
+
+def test(flags):
+    # TODO deprecate below
+    model = Net(num_actions=flags.num_actions, use_lstm=flags.use_lstm)
+    model = model.to(device=flags.learner_device)
+
+    latest_checkpoint = get_latest_checkpoint_filename(wandb.run.path, prefix="model_step_", suffix=".tar")
+    assert latest_checkpoint is not None, "No checkpoint to load!"
+    checkpoint = wandb.restore(latest_checkpoint, run_path=wandb.run.path)
+    checkpoint_states = torch.load(checkpoint.name, map_location=flags.learner_device)
+    model.load_state_dict(checkpoint_states["model_state_dict"])
+    stats = checkpoint_states["stats"]
+    logger.info(f"Testing model with current stats:\n{stats}")
+
     # Run tests
     logger.info("Creating test envs")
     try:
-        test_env_config = godot_config_from_flags(
-            flags, random_int=2000, is_fixed_generator=True, num_fixed_worlds_per_task=flags.test_episodes_per_task
-        )
+        test_env_config = godot_config_from_flags(flags, random_int=2000)
         test_env = Environment(create_godot_env(test_env_config))
-        eval_model.load_state_dict(model.state_dict())
-        logger.info("Running tests")
+        model.eval()
         test_data = run_test(
             test_env,
-            eval_model,
+            model,
             flags.test_episodes_per_task * test_env.gym_env.num_tasks,
             log_prefix="test/",
             is_video_logged=False,
@@ -666,8 +697,11 @@ def train(flags):
         test_data["step"] = stats.get("step", 0)
         wandb.log(test_data)
     except Exception as e:
-        logger.error(f"Testing failed with {e}! Printing stats and exiting!")
-        test_data = stats.copy()
+
+        logger.error(f"Testing failed with {e}! Saving godot errors and raising!")
+        sentry_sdk.capture_exception(e)
+        wandb.save(f"{GODOT_ERROR_LOG_PATH}/*", base_path=GODOT_ERROR_LOG_PATH, policy="now")
+        raise e
 
     test_data["config/total_steps"] = flags.total_steps
 
@@ -682,28 +716,49 @@ def train(flags):
     return test_data
 
 
-def test(flags):
-    raise NotImplementedError()
-
-
 def main(flags):
     flags.use_lstm = not flags.no_lstm
     if not flags.pipes_basename.startswith("unix:"):
         raise Exception("--pipes_basename has to be of the form unix:/some/path.")
 
-    if flags.mode == "train":
-        if flags.write_profiler_trace:
-            logger.info("Running with profiler.")
-            with torch.autograd.profiler.profile() as prof:
-                train(flags)
-            filename = "chrome-%s.trace" % time.strftime("%Y%m%d-%H%M%S")
-            logger.info("Writing profiler trace to '%s.gz'", filename)
-            prof.export_chrome_trace(filename)
-            os.system("gzip %s" % filename)
-        else:
-            train(flags)
+    sentry_sdk.init(
+        dsn="https://198a62315b2c4c2a99cb8a5493224e2f@o568344.ingest.sentry.io/6453090",
+        # Set traces_sample_rate to 1.0 to capture 100%
+        # of transactions for performance monitoring.
+        # We recommend adjusting this value in production.
+        traces_sample_rate=1.0,
+    )
+
+    os.makedirs(GODOT_ERROR_LOG_PATH, exist_ok=True)
+    wandb.save(
+        f"{GODOT_ERROR_LOG_PATH}/*", base_path=GODOT_ERROR_LOG_PATH
+    )  # Should watch for anything here and upload immediately?
+
+    if not flags.disable_cuda and torch.cuda.is_available():
+        logger.info("Using CUDA.")
+        flags.learner_device = torch.device("cuda:0")
+        actor_device_index = "1" if torch.cuda.device_count() > 1 else "0"
+        flags.actor_device = torch.device(f"cuda:{actor_device_index}")
     else:
-        test(flags)
+        logger.info("Not using CUDA.")
+        flags.learner_device = torch.device("cpu")
+        flags.actor_device = torch.device("cpu")
+
+    if flags.max_learner_queue_size is None:
+        flags.max_learner_queue_size = flags.batch_size
+
+    if flags.write_profiler_trace:
+        logger.info("Running with profiler.")
+        with torch.autograd.profiler.profile() as prof:
+            result = train(flags)
+        filename = "chrome-%s.trace" % time.strftime("%Y%m%d-%H%M%S")
+        logger.info("Writing profiler trace to '%s.gz'", filename)
+        prof.export_chrome_trace(filename)
+        os.system("gzip %s" % filename)
+    else:
+        result = train(flags)
+
+    return result
 
 
 if __name__ == "__main__":

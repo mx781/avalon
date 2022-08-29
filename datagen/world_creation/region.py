@@ -1,30 +1,16 @@
 import math
 from typing import List
-from typing import Optional
 from typing import Tuple
 from typing import Union
 
 import attr
 import numpy as np
+import openturns as ot
 from numpy.random import Generator
 
-import openturns as ot
 from contrib.serialization import Serializable
-from datagen.godot_base_types import NewRange
+from datagen.godot_base_types import FloatRange
 from datagen.world_creation.utils import get_random_seed_for_line
-
-
-@attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
-class FloatRange(NewRange):
-    min_ge: float
-    max_lt: float
-
-    def overlap(self, other: "FloatRange") -> Optional["FloatRange"]:
-        min_ge = max(self.min_ge, other.min_ge)
-        max_lt = min(self.max_lt, other.max_lt)
-        if min_ge >= max_lt:
-            return None
-        return FloatRange(min_ge, max_lt)
 
 
 @attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
@@ -54,7 +40,6 @@ class Region(Serializable):
             return True
         return False
 
-    # TODO: possibly better to think about these regions as having heights as well
     def contains_point_3d(self, point: Union[np.ndarray, Tuple[float, float, float]], epsilon: float = 0.01) -> bool:
         if point[0] > self.x.min_ge - epsilon and point[0] < self.x.max_lt + epsilon:
             if point[2] > self.z.min_ge - epsilon and point[2] < self.z.max_lt + epsilon:
@@ -98,7 +83,7 @@ class Region(Serializable):
         )
 
     def get_randomish_points(self, count: int) -> np.ndarray:
-        points = create_low_discrepancy_random_points(count)
+        points = _create_low_discrepancy_random_points(count)
         # shift to 0 - 1 range
         points *= 0.5
         points += 0.5
@@ -116,7 +101,7 @@ class EdgedRegion(Region):
     edge_vertices: np.ndarray
 
 
-def create_low_discrepancy_random_points(min_point_count: int) -> np.ndarray:
+def _create_low_discrepancy_random_points(min_point_count: int) -> np.ndarray:
     dim = 2
     distribution = ot.ComposedDistribution([ot.Uniform()] * dim)
     sequence = ot.SobolSequence(dim)

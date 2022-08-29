@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Tuple
 
 import attr
 import numpy as np
@@ -6,31 +7,55 @@ from scipy import stats
 from skimage import morphology
 from skimage.morphology import flood_fill
 
-from datagen.world_creation.heightmap import ExportConfig
-from datagen.world_creation.items import CANONICAL_FOOD_CLASS
+from common.utils import only
+from datagen.world_creation.configs.export import ExportConfig
+from datagen.world_creation.configs.task import TaskConfig
+from datagen.world_creation.constants import ITEM_FLATTEN_RADIUS
+from datagen.world_creation.constants import AvalonTask
+from datagen.world_creation.entities.food import CANONICAL_FOOD_CLASS
+from datagen.world_creation.entities.tools.log import Log
+from datagen.world_creation.entities.tools.stone import Stone
+from datagen.world_creation.entities.tools.weapons import LargeRock
+from datagen.world_creation.entities.tools.weapons import Rock
+from datagen.world_creation.entities.tools.weapons import Stick
 from datagen.world_creation.tasks.bridge import create_bridge_obstacle
 from datagen.world_creation.tasks.eat import add_food_tree_for_simple_task
 from datagen.world_creation.tasks.fight import create_fight_obstacle
 from datagen.world_creation.tasks.stack import create_stack_obstacle
+from datagen.world_creation.tasks.stack import flatten_places_under_items
 from datagen.world_creation.tasks.throw import throw_obstacle_maker
-from datagen.world_creation.tasks.utils import TaskGenerationFunctionResult
-from datagen.world_creation.tasks.utils import export_skill_world
-from datagen.world_creation.tasks.utils import scale_with_difficulty
-from datagen.world_creation.tasks.utils import starting_hit_points_from_difficulty
-from datagen.world_creation.world_location_data import to_2d_point
+from datagen.world_creation.utils import to_2d_point
+from datagen.world_creation.worlds.difficulty import scale_with_difficulty
+from datagen.world_creation.worlds.export import export_world
+
+
+@attr.s(auto_attribs=True, collect_by_mro=True, hash=True)
+class CarryTaskConfig(TaskConfig):
+    # how far should the item be moved away from its original spot on difficulty 0.0 and 1.0 respectively
+    carry_dist_easy: float = 1.0
+    carry_dist_hard: float = 10.0
+    # in which tasks should we be carrying items away from their original spawn locations?
+    # the way the carry task works is simply by moving the items farther away from their original locations
+    tasks: Tuple[AvalonTask, ...] = (AvalonTask.THROW, AvalonTask.FIGHT, AvalonTask.STACK, AvalonTask.BRIDGE)
+
+
+_GENERATION_FUNCTION_BY_TASK = {
+    AvalonTask.THROW: throw_obstacle_maker,
+    AvalonTask.FIGHT: create_fight_obstacle,
+    AvalonTask.STACK: create_stack_obstacle,
+    AvalonTask.BRIDGE: create_bridge_obstacle,
+}
 
 
 def generate_carry_task(
-    rand: np.random.Generator, difficulty: float, output_path: Path, export_config: ExportConfig
-) -> TaskGenerationFunctionResult:
-    inner_generator = rand.choice(
-        [
-            throw_obstacle_maker,
-            create_fight_obstacle,
-            create_stack_obstacle,
-            create_bridge_obstacle,
-        ]
-    )
+    rand: np.random.Generator,
+    difficulty: float,
+    output_path: Path,
+    export_config: ExportConfig,
+    task_config: CarryTaskConfig = CarryTaskConfig(),
+):
+    inner_task = rand.choice(task_config.tasks)
+    inner_generator = _GENERATION_FUNCTION_BY_TASK[inner_task]
     result = inner_generator(rand, difficulty, export_config, is_for_carry=True)
     if len(result) == 5:
         difficulty, food_class, locations, spawn_location, world = result
@@ -41,7 +66,7 @@ def generate_carry_task(
         food_class = CANONICAL_FOOD_CLASS
         is_on_tree = True
 
-    world.end_height_obstacles(locations, is_accessible_from_water=False)
+    world, locations = world.end_height_obstacles(locations, is_accessible_from_water=False)
 
     # move the things to your spawn region
 
@@ -69,23 +94,24 @@ def generate_carry_task(
         for item in all_mobile_items:
             full_position_mask = np.logical_or(item.solution_mask, spawn_region)
             item = attr.evolve(item, solution_mask=full_position_mask)
-            carry_distance = get_carry_distance_preference(difficulty)
-            world.carry_tool_randomly(rand, item, carry_distance)
+            desired_distance = scale_with_difficulty(
+                difficulty, task_config.carry_dist_easy, task_config.carry_dist_hard
+            )
+            carry_distance = stats.norm(desired_distance, desired_distance / 4.0)
+            world = world.carry_tool_randomly(rand, item, carry_distance)
+
+    if inner_task == AvalonTask.STACK:
+        world = flatten_places_under_items(world, earlier_item_count=0, filter_to_classes=Stone)
+    elif inner_task == AvalonTask.BRIDGE:
+        log = only([x for x in world.items if isinstance(x, Log)])
+        world = world.flatten(to_2d_point(log.position), ITEM_FLATTEN_RADIUS, ITEM_FLATTEN_RADIUS)
+    else:
+        world = flatten_places_under_items(world, earlier_item_count=0, filter_to_classes=(Rock, LargeRock, Stick))
 
     if is_on_tree:
-        add_food_tree_for_simple_task(world, locations)
-        world.add_spawn(rand, difficulty, locations.spawn, locations.goal)
+        world = add_food_tree_for_simple_task(world, locations)
+        world = world.add_spawn(rand, difficulty, locations.spawn, locations.goal)
     else:
-        world.add_spawn_and_food(rand, difficulty, locations.spawn, locations.goal, food_class=food_class)
+        world = world.add_spawn_and_food(rand, difficulty, locations.spawn, locations.goal, food_class=food_class)
 
-    export_skill_world(output_path, rand, world)
-
-    return TaskGenerationFunctionResult(starting_hit_points_from_difficulty(difficulty))
-
-
-def get_carry_distance_preference(difficulty: float):
-    min_item_dist = 1.0
-    max_item_dist = 10.0
-    desired_distance = scale_with_difficulty(difficulty, min_item_dist, max_item_dist)
-    distance_preference = stats.norm(desired_distance, desired_distance / 4.0)
-    return distance_preference
+    export_world(output_path, rand, world)

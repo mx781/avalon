@@ -1,5 +1,8 @@
+import math
 from enum import Enum
 from typing import Dict
+from typing import Final
+from typing import List
 from typing import Set
 from typing import Tuple
 
@@ -191,6 +194,8 @@ STANDING_REACH_HEIGHT = AGENT_HEIGHT + MAX_REACH_DIST
 JUMPING_REQUIRED_HEIGHT = 2.0
 CLIMBING_REQUIRED_HEIGHT = 3.2
 
+ITEM_FLATTEN_RADIUS = 2.0
+
 # how big is the stone for stacking
 BOX_HEIGHT = 1.0
 
@@ -232,15 +237,27 @@ METERS_OF_TREE_CLEARANCE_AROUND_LINE_OF_SIGHT = 5.0
 FLORA_REMOVAL_METERS = 1.0
 
 
-def get_min_task_distance(min_distance: float) -> float:
-    return 2 * DEFAULT_SAFETY_RADIUS - min_distance
-
-
-def get_all_tasks_for_task_groups(task_groups: Tuple[AvalonTaskGroup, ...]) -> Set[AvalonTask]:
+def get_all_tasks_for_task_groups(task_groups: Tuple[AvalonTaskGroup, ...]) -> List[AvalonTask]:
     result: Set[AvalonTask] = set()
     for task_group in task_groups:
         result.update(TASKS_BY_TASK_GROUP[task_group])
-    return result
+    return sorted(result, key=lambda x: x.value)
 
 
+STARTING_HIT_POINTS: float = 1.0
+
+# for performance experiments
+IS_ALL_SCENERY_IN_MAIN = False
+FLORA_RADIUS_IN_TILES = 1
+
+IS_DEBUGGING_IMPOSSIBLE_WORLDS = False
+WATER_LINE = 0.0
+UNCLIMBABLE_BIOME_ID = 19
+DARK_SHORE = UNCLIMBABLE_BIOME_ID + 1
+FRESH_WATER = DARK_SHORE + 1
+SWAMP = FRESH_WATER + 1
+MIN_CLIFF_TERRAIN_ANGLE = (math.pi / 2) * 0.4
+MAX_CLIFF_TERRAIN_ANGLE = (math.pi / 2) * 0.7
+WORLD_RAISE_AMOUNT = 10_000
+IDENTITY_BASIS: Final = np.array([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], dtype=float)
 UP_VECTOR = np.array([0.0, 1.0, 0.0])

@@ -1,21 +1,19 @@
 # GENERATED FILE
 # See generate_godot_code.py for details
 
+import attr
 from typing import Final
 from typing import Optional
 
-import attr
-
 from datagen.godot_base_types import *
+
 
 READY_LOG_SIGNAL: Final = "GODATA!"
 FIXED_FPS: Final = 10
-RGB_FEATURE: Final = "rgb"
 RGBD_FEATURE: Final = "rgbd"
-DEPTH_FEATURE: Final = "depth"
-LABEL_FEATURE: Final = "label"
-DATASET_ID_FEATURE: Final = "dataset_id"
-VIDEO_ID_FEATURE: Final = "video_id"
+ISOMETRIC_RGBD_FEATURE: Final = "isometric_rgbd"
+TOP_DOWN_RGBD_FEATURE: Final = "top_down_rgbd"
+EPISODE_ID_FEATURE: Final = "episode_id"
 FRAME_ID_FEATURE: Final = "frame_id"
 EVENT_HAPPENED_FEATURE: Final = "event_happened"
 ACTION_FEATURE: Final = "action"
@@ -26,6 +24,7 @@ ACTION_MESSAGE: Final = 3
 SELECT_FEATURES_MESSAGE: Final = 4
 QUERY_AVAILABLE_FEATURES_MESSAGE: Final = 5
 CLOSE_MESSAGE: Final = 6
+DEBUG_CAMERA_ACTION_MESSAGE: Final = 7
 HUMAN_INPUT_MESSAGE: Final = 9
 VR_ACTION_SPACE: Final = "VR_ACTION_SPACE"
 MOUSE_KEYBOARD_ACTION_SPACE: Final = "MOUSE_KEYBOARD_ACTION_SPACE"
@@ -70,17 +69,11 @@ class PlayerSpec(SpecBase):
     # m/s
     minimum_fall_speed: float
     fall_damage_coefficient: float
-    total_energy_coefficient: float
-    body_kinetic_energy_coefficient: float
-    body_potential_energy_coefficient: float
-    head_potential_energy_coefficient: float
-    left_hand_kinetic_energy_coefficient: float
-    left_hand_potential_energy_coefficient: float
-    right_hand_kinetic_energy_coefficient: float
-    right_hand_potential_energy_coefficient: float
     num_frames_alive_after_food_is_gone: int
     eat_area_radius: float
     is_displaying_debug_meshes: bool
+    is_human_playback_enabled: bool
+    is_slowed_from_crouching: bool
 
 
 @attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
@@ -92,9 +85,6 @@ class RecordingOptionsSpec(SpecBase):
     is_teleporter_enabled: bool
     resolution_x: int
     resolution_y: int
-    is_recording_rgb: bool
-    # TODO this doesn't do anything at the moment
-    is_recording_depth: bool
     is_recording_human_actions: bool
     is_remote_recording_enabled: bool
     is_adding_debugging_views: bool
@@ -113,22 +103,15 @@ class HumanPlayerSpec(PlayerSpec):
 
 @attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
 class SimSpec(SpecBase, DataConfigImplementation):
-    # TODO these aren't related to RL envs, we'll leave them for now
-    dataset_id: int
-    label: int
-    video_min: int
-    video_max: int
-    frame_max: int
-    random_int: int
-    random_key: str
+    episode_seed: Optional[int]
     dir_root: str
-    output_file_name_format: str
-    scene_path: str
-    is_using_shared_caches: bool
-    # TODO this isn't related to RL envs, we'll leave them for now
-    is_generating_paired_videos: bool
     recording_options: RecordingOptionsSpec
-    player: Optional[PlayerSpec]
+    player: PlayerSpec
+
+
+@attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
+class AvalonSimSpec(SimSpec):
+    pass
 
 
 @attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
@@ -138,11 +121,6 @@ class MouseKeyboardAgentPlayerSpec(AgentPlayerSpec):
 
 @attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
 class MouseKeyboardHumanPlayerSpec(HumanPlayerSpec):
-    pass
-
-
-@attr.s(auto_attribs=True, hash=True, collect_by_mro=True)
-class AvalonSimSpec(SimSpec):
     pass
 
 

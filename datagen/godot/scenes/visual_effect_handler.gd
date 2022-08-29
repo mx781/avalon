@@ -5,6 +5,8 @@ class_name VisualEffectHandler
 var environment: Environment
 var max_brightness := 1.0
 var max_saturation := 1.0
+var min_brightness := 0.2
+var min_saturation := 0.2
 var last_hit_points := 1.0
 
 
@@ -35,8 +37,8 @@ func react(observation: Dictionary):
 	elif last_hit_points != hit_points:
 		last_hit_points = hit_points
 		hit_points = clamp(hit_points, 0.0, 1.0)
-		new_brightness = lerp(0.0, max_brightness, hit_points)
-		new_saturation = lerp(0.0, max_saturation, hit_points)
+		new_brightness = lerp(min_brightness, max_brightness, hit_points)
+		new_saturation = lerp(min_saturation, max_saturation, hit_points)
 	else:
 		return
 	environment.adjustment_brightness = new_brightness

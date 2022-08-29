@@ -2,10 +2,16 @@ import hashlib
 import json
 import os
 import shutil
+import sys
 import time
+import traceback
 from multiprocessing import Pool
 from pathlib import Path
+from typing import Any
+from typing import Dict
 from typing import List
+
+import requests
 
 from contrib.utils import run_local_command
 from datagen.godot_generated_types import AvalonSimSpec
@@ -33,6 +39,8 @@ def generate_apk(
     include_worlds: bool = True,
     is_output_traced: bool = False,
 ):
+    output_path.mkdir(parents=True, exist_ok=True)
+
     # create a dir in which we'll copy all the files in and begin doing the work
     participant_working_path = tmp_path / participant_id
     if participant_working_path.exists():
@@ -63,18 +71,24 @@ def generate_apk(
     apk_file = output_path / apk_name
 
     self_contained_godot_bin = participant_working_path / "godot_bin"
-    godot_bin = Path("/opt/oculus/godot/godot")
     (participant_working_path / "._sc_").touch()
     (participant_working_path / "editor_data").mkdir()
     (participant_working_path / "editor_data" / "editor_settings-3.tres").write_text(EDITOR_SETTINGS)
 
     pre_bake_command = f"cd {participant_godot_path} && {apk_script}"
-    pack_command = f"cd {participant_godot_path} && {self_contained_godot_bin} --verbose --export-pack  Android {pck_temp} | tee ../build.pck.log"
-    bake_command = f"cd {participant_godot_path} && {self_contained_godot_bin} --verbose --export-debug Android {apk_temp} | tee ../build.apk.log"
+    pack_command = f"cd {participant_godot_path} && {self_contained_godot_bin} --verbose --export-pack  Android {pck_temp} 2>&1 | tee ../build.pck.log"
+    bake_command = f"cd {participant_godot_path} && {self_contained_godot_bin} --verbose --export-debug Android {apk_temp} 2>&1 | tee ../build.apk.log"
 
     # make sure build dependencies are installed, clear editor config
     run_local_command(pre_bake_command, trace_output=is_output_traced)
-    os.link(godot_bin, self_contained_godot_bin)
+
+    # Actually make the self-contained bin available (now that pre-bake script has downloaded it)
+    # We must first ensure there is a copy of it on the tmp path as hard links cannot be done across file systems
+    tmp_godot_path = tmp_path / "godot"
+    if not tmp_godot_path.exists():
+        shutil.copyfile("/opt/oculus/godot/godot", tmp_godot_path)
+    os.link(tmp_godot_path, self_contained_godot_bin)
+    os.chmod(tmp_godot_path, 755)  # for some reason, os.link drops the executable permission
 
     # bake twice, the first build just fixes dependencies/imports
     run_local_command(pack_command, trace_output=is_output_traced)
@@ -119,7 +133,7 @@ def generate_apks(
         pass
 
     def on_error(error: BaseException):
-        print(error)
+        traceback.print_exception(type(error), error, sys.exc_info()[2])
         errors.append(error)
 
     start_time = time.time()
@@ -161,3 +175,31 @@ def generate_apks(
     print(f"finished in {time.time() - start_time} seconds")
 
     return results
+
+
+AVALON_SERVER_URL = "http://avalon.int8.ai:64080"
+
+
+def add_worlds_to_server(worlds: List[Dict[str, Any]]):
+    world_ids = [world["world_id"] for world in worlds]
+
+    for world_id in world_ids:
+        r = requests.get(f"{AVALON_SERVER_URL}/make_world/{world_id}/")
+        assert r.status_code == 200
+
+    r = requests.get(f"{AVALON_SERVER_URL}/get_state/")
+    assert r.status_code == 200
+    state = r.json()["state"]
+    assert set(world_ids).issubset(set(state["user_ids_by_world_id"].keys()))
+
+
+def add_apk_version_to_server(apk_version: str):
+    r = requests.get(f"{AVALON_SERVER_URL}/add_apk_version/{apk_version}/")
+    assert r.status_code == 200
+
+
+def upload_apk_to_server(path: Path):
+    files = {"file": path.open("rb")}
+    r = requests.post(f"{AVALON_SERVER_URL}/upload_apk/", files=files)
+    assert r.status_code == 200
+    return r.json()

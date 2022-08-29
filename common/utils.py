@@ -29,6 +29,7 @@ import torch
 import wandb
 from IPython.core.display import display
 from PIL import Image
+from nptyping import NDArray
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.loggers.base import rank_zero_experiment
 from torch import Tensor
@@ -36,7 +37,6 @@ from torch.types import Device
 from torch.utils.data.dataset import Dataset
 from wandb.sdk.wandb_run import Run
 
-# this should probably be somewhere else, this will probably break at some point
 from contrib.utils import FILESYSTEM_ROOT
 from contrib.utils import TEMP_DIR
 
@@ -300,3 +300,16 @@ def get_cuda_device_if_available() -> str:
         device_id = torch.cuda.current_device()
         return f"cuda:{device_id}"
     return "cpu"
+
+
+def float_to_str(f: float) -> str:
+    # rstrip is needed to account for int cases
+    return np.format_float_positional(f).rstrip(".").replace(".", "_")
+
+
+NPArrayType = TypeVar("NPArrayType", bound=NDArray)
+
+
+def to_immutable_array(value: NPArrayType) -> NPArrayType:
+    value.setflags(write=False)
+    return value

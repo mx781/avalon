@@ -13,12 +13,10 @@ export var active_chase_full_speed := 3.25
 export var active_chase_turn_speed := 1.5
 export var active_chase_turn_rotation_speed := 1.5
 
-var in_detection_zone: PlayerWithinDetectionZone
 var return_to_territory: ReturnToTerritoryBehavior
 
 
 func _ready():
-	in_detection_zone = PlayerWithinDetectionZone.new()
 	return_to_territory = ReturnToTerritoryBehavior.new(
 		FlyInDirection.new(TOWARDS_TERRITORY, inactive_speed),
 		global_transform.origin,
@@ -50,12 +48,16 @@ func select_next_behavior() -> AnimalBehavior:
 	if return_to_territory.is_returning_to_territory(self):
 		return return_to_territory
 
-	if (
-		in_detection_zone.is_matched_by(self)
-		and is_player_in_territory()
-		and not should_give_respite()
-	):
+	if is_player_in_detection_radius and is_player_in_territory() and not should_give_respite():
 		return active_behavior
+
+	if HARD.mode() and previous_behavior == active_behavior:
+		var reason = (
+			"player outside radius %s" % territory_radius
+			if not is_player_in_detection_radius
+			else ("player left territory" if not is_player_in_territory() else "of attack respite")
+		)
+		print("%s giving up pursuit because %s" % [self, reason])
 
 	return inactive_behavior
 

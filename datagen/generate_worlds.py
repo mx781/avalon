@@ -1,3 +1,4 @@
+import os
 import time
 import traceback
 from multiprocessing import Pool
@@ -9,18 +10,20 @@ from typing import Optional
 import attr
 import numpy as np
 
+from common.utils import float_to_str
+from datagen.errors import ImpossibleWorldError
+from datagen.world_creation.configs.export import get_eval_agent_export_config
+from datagen.world_creation.configs.export import get_oculus_export_config
 from datagen.world_creation.constants import AvalonTask
-from datagen.world_creation.heightmap import DebugVisualizationConfig
-from datagen.world_creation.heightmap import get_oculus_export_config
-from datagen.world_creation.items import ALL_PREDATOR_CLASSES
-from datagen.world_creation.items import ALL_PREY_CLASSES
-from datagen.world_creation.items import FOODS
-from datagen.world_creation.tasks.compositional import ForcedComposition
+from datagen.world_creation.entities.animals import ALL_PREDATOR_CLASSES
+from datagen.world_creation.entities.animals import ALL_PREY_CLASSES
+from datagen.world_creation.entities.food import FOODS
 from datagen.world_creation.tasks.eat import ForcedFood
 from datagen.world_creation.tasks.fight import ForceFight
 from datagen.world_creation.tasks.hunt import ForceHunt
-from datagen.world_creation.utils import ImpossibleWorldError
+from datagen.world_creation.types import DebugVisualizationConfig
 from datagen.world_creation.world_generator import _GENERATION_FUNCTION_BY_TASK
+from datagen.world_creation.worlds.compositional import ForcedComposition
 
 _BASE_FIGHT_DATA = ForceFight(
     weapon_value=2,
@@ -69,11 +72,15 @@ def generate_world(
     task_idx: int,
     is_practice: bool,
     debug_visualization_config: Optional[DebugVisualizationConfig],
+    is_generating_for_human: bool,
     max_retries: int = 10,
 ) -> Dict:
-    export_config = get_oculus_export_config(world_id)
+    if is_generating_for_human:
+        export_config = get_oculus_export_config(world_id)
+    else:
+        export_config = get_eval_agent_export_config()
     if debug_visualization_config:
-        export_config = attr.evolve(export_config, num_tiles=1)
+        export_config = attr.evolve(export_config, is_tiled=False)
         export_config = attr.evolve(export_config, debug_visualization_config=debug_visualization_config)
     start_time = time.time()
     rand = np.random.default_rng(seed)
@@ -135,6 +142,7 @@ def generate_worlds(
     base_output_path: Path,
     tasks: List[AvalonTask],
     num_worlds_per_task: int,
+    is_generating_for_human: bool,
     start_seed: int = 0,
     is_practice: bool = False,
     min_difficulty: float = 0.0,
@@ -144,6 +152,9 @@ def generate_worlds(
     debug_visualization_config: Optional[DebugVisualizationConfig] = None,
     is_async: bool = True,
 ):
+    assert (
+        os.getenv("PYTHONHASHSEED", None) is not None
+    ), "PYTHONHASHSEED must be set for worlds to be generated deterministically."
     total_errors = 0
     all_impossible_world_errors = []
     all_unhandled_errors = []
@@ -176,7 +187,7 @@ def generate_worlds(
                 seed = curr_seed
 
                 task_name = task.value.lower()
-                difficulty_str = str(difficulty).replace(".", "_")
+                difficulty_str = float_to_str(difficulty)
                 if is_practice:
                     world_id = f"practice__{task_name}__{seed}__{difficulty_str}"
                 else:
@@ -199,6 +210,7 @@ def generate_worlds(
                             i,
                             is_practice,
                             debug_visualization_config,
+                            is_generating_for_human,
                         ),
                         callback=on_done,
                         error_callback=on_error,
@@ -214,6 +226,7 @@ def generate_worlds(
                         i,
                         is_practice,
                         debug_visualization_config,
+                        is_generating_for_human,
                     )
         for request in requests:
             request.wait()

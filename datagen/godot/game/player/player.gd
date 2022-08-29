@@ -2,8 +2,7 @@ extends Node
 
 class_name Player
 
-var spec: PlayerSpec
-
+# player nodes
 var target_player: Spatial
 var target_head: Spatial
 var target_left_hand
@@ -18,8 +17,10 @@ var collision_head: CollisionShape
 var climbing_ray: RayCast
 var ground_ray: RayCast
 var eat_area: Area
+var eyes: Camera
 
 # NOTE: these must be present in `reset_on_new_world`!
+# player state
 var hit_points: float
 var gravity_velocity := Vector3.ZERO
 var surface_normal := Vector3.UP
@@ -28,42 +29,42 @@ var current_observation := {}
 var _hit_points_gained_from_eating: float = 0.0
 var _hit_points_lost_from_enemies: float = 0.0
 var is_dead := false
-var y_vel_history = []
+var floor_y_vel_history := []
+var falling_y_vel_history := []
+var wall_grab_history := []
+# see `_get_fall_damage` for more explanation on what these constants are used for
+var frames_after_taking_fall_damage := 0
+var frames_after_reaching_fall_damage_speeds := 0
 
-# TODO make this exportable once they actually dynamically update things
-export var height := 2.0  # TODO set height during VR calibration
-export var head_radius := 0.1  # from average human head circumference (57cm)
+# player configuration
+var height := 2.0
+var head_radius := 1.0  # from average human head circumference (57cm)
+var starting_left_hand_position_relative_to_head := Vector3(-0.5, -0.5, -0.5)
+var starting_right_hand_position_relative_to_head := Vector3(0.5, -0.5, -0.5)
 
-export var max_head_linear_speed := 0.3
-export var max_head_angular_speed := Vector3(5.0, 10.0, 1.0)
-export var max_hand_linear_speed := 1.0
-export var max_hand_angular_speed := 15.0
-export var jump_height := 1.5
-export var arm_length := 1.5
-export var starting_hit_points := 1.0
-export var mass := 60.0  # TODO change player mass to 60kg and update all items to be relative to this
-export var arm_mass_ratio := 0.05  # from https://exrx.net/Kinesiology/Segments
-export var head_mass_ratio := 0.08  # from https://exrx.net/Kinesiology/Segments
-export var standup_speed_after_climbing := 0.1  # in m/s
-export var min_head_position_off_of_floor := 0.2
-export var push_force_magnitude := 5.0
-export var throw_force_magnitude := 3.0
-export var starting_left_hand_position_relative_to_head := Vector3(-0.5, -0.5, -0.5)
-export var starting_right_hand_position_relative_to_head := Vector3(0.5, -0.5, -0.5)
-export var minimum_fall_speed := 10.0
-export var fall_damage_coefficient := 0.000026
-export var total_energy_coefficient := 0.0
-export var body_kinetic_energy_coefficient := 0.0
-export var body_potential_energy_coefficient := 0.0
-export var head_potential_energy_coefficient := 0.0
-export var left_hand_kinetic_energy_coefficient := 0.0
-export var left_hand_potential_energy_coefficient := 0.0
-export var right_hand_kinetic_energy_coefficient := 0.0
-export var right_hand_potential_energy_coefficient := 0.0
-# TODO this isn't quite the right place for it but better than the alternatives
-export var num_frames_alive_after_food_is_gone := 50
-export var eat_area_radius := 0.25
-export var is_displaying_debug_meshes := false
+var spec: PlayerSpec
+# TODO: sigh ... this is very error prone how these get set
+export var max_head_linear_speed: float
+export var max_head_angular_speed: Vector3
+export var max_hand_linear_speed: float
+export var max_hand_angular_speed: float
+export var jump_height: float
+export var arm_length: float
+export var starting_hit_points: float
+export var mass: float
+export var arm_mass_ratio: float  # from https://exrx.net/Kinesiology/Segments
+export var head_mass_ratio: float  # from https://exrx.net/Kinesiology/Segments
+export var standup_speed_after_climbing: float
+export var min_head_position_off_of_floor: float
+export var push_force_magnitude: float
+export var throw_force_magnitude: float
+export var minimum_fall_speed: float
+export var fall_damage_coefficient: float
+export var num_frames_alive_after_food_is_gone: float
+export var eat_area_radius: float
+export var is_displaying_debug_meshes: bool
+export var is_human_playback_enabled: bool
+export var is_slowed_from_crouching: bool
 
 # `move_and_slide` constants, we should keep this fixed because they can change the actual movement distance
 const UP_DIRECTION := Vector3.UP
@@ -73,6 +74,13 @@ const FLOOR_MAX_ANGLE := deg2rad(45)
 const INFINITE_INERTIA := false
 var PHYSICS_FPS: float = ProjectSettings.get_setting("physics/common/physics_fps")
 var GRAVITY_MAGNITUDE: float = ProjectSettings.get_setting("physics/3d/default_gravity")
+# TODO move into config
+var extra_height_margin := 0.0
+
+# see `_get_fall_damage` for more explanation on what these constants are used for
+const _FALL_DAMAGE_WINDOW = 4
+const _FALL_DAMAGE_WAIT_PERIOD = 2
+const _FALL_DAMAGE_DEBOUNCE_PERIOD = 4
 
 # storing previous state of the body
 var prev_hit_points: float
@@ -93,56 +101,45 @@ var prev_physical_right_hand_angular_velocity: Vector3
 
 
 func _ready() -> void:
-	ready()
-	get_nodes()
+	initialize()
+	set_nodes_in_ready()
 	update_previous_transforms_and_velocities(true)
 	# reset current observation, happens after `update_previous_transforms_and_velocities` so everthing starts at 0
 	set_current_observation()
 
 
-func ready():
-	# TODO temporary hack until we can remove sim specs
-	max_head_linear_speed = spec.max_head_linear_speed
-	max_head_angular_speed = spec.max_head_angular_speed
-	max_hand_linear_speed = spec.max_hand_linear_speed
-	max_hand_angular_speed = spec.max_hand_angular_speed
-	jump_height = spec.jump_height
-	arm_length = spec.arm_length
-	starting_hit_points = spec.starting_hit_points
-	mass = spec.mass
-	arm_mass_ratio = spec.arm_mass_ratio
-	head_mass_ratio = spec.head_mass_ratio
-	standup_speed_after_climbing = spec.standup_speed_after_climbing
-	min_head_position_off_of_floor = spec.min_head_position_off_of_floor
-	push_force_magnitude = spec.push_force_magnitude
-	throw_force_magnitude = spec.throw_force_magnitude
-	minimum_fall_speed = spec.minimum_fall_speed
-	fall_damage_coefficient = spec.fall_damage_coefficient
-	total_energy_coefficient = spec.total_energy_coefficient
-	body_kinetic_energy_coefficient = spec.body_kinetic_energy_coefficient
-	body_potential_energy_coefficient = spec.body_potential_energy_coefficient
-	head_potential_energy_coefficient = spec.head_potential_energy_coefficient
-	left_hand_kinetic_energy_coefficient = spec.left_hand_kinetic_energy_coefficient
-	left_hand_potential_energy_coefficient = spec.left_hand_potential_energy_coefficient
-	right_hand_kinetic_energy_coefficient = spec.right_hand_kinetic_energy_coefficient
-	right_hand_potential_energy_coefficient = spec.right_hand_potential_energy_coefficient
-	# TODO this isn't quite the right place for it but better than the alternatives
-	num_frames_alive_after_food_is_gone = spec.num_frames_alive_after_food_is_gone
-	eat_area_radius = spec.eat_area_radius
-	is_displaying_debug_meshes = spec.is_displaying_debug_meshes
+func initialize():
 	hit_points = starting_hit_points
 
-	# TODO probably more check we can add here
-	HARD.assert(max_head_linear_speed > 0, "`max_head_linear_speed` must be greater than 0")
-	HARD.assert(max_head_angular_speed.x > 0, "`max_head_angular_speed.x` must be greater than 0")
-	HARD.assert(max_head_angular_speed.y > 0, "`max_head_angular_speed.y` must be greater than 0")
-	HARD.assert(max_head_angular_speed.z > 0, "`max_head_angular_speed.z` must be greater than 0")
-	HARD.assert(max_hand_linear_speed > 0, "`max_hand_linear_speed` must be greater than 0")
-	HARD.assert(max_hand_angular_speed > 0, "`max_hand_angular_speed` must be greater than 0")
-	HARD.assert(jump_height > 0, "`jump_height` must be greater than 0")
+	HARD.assert(max_head_linear_speed != null, "max_head_linear_speed is not defined")
+	HARD.assert(max_head_angular_speed != null, "max_head_angular_speed is not defined")
+	HARD.assert(max_hand_linear_speed != null, "max_hand_linear_speed is not defined")
+	HARD.assert(max_hand_angular_speed != null, "max_hand_angular_speed is not defined")
+	HARD.assert(jump_height != null, "jump_height is not defined")
+	HARD.assert(arm_length != null, "arm_length is not defined")
+	HARD.assert(starting_hit_points != null, "starting_hit_points is not defined")
+	HARD.assert(mass != null, "mass is not defined")
+	HARD.assert(arm_mass_ratio != null, "arm_mass_ratio is not defined")
+	HARD.assert(head_mass_ratio != null, "head_mass_ratio is not defined")
+	HARD.assert(standup_speed_after_climbing != null, "standup_speed_after_climbing is not defined")
+	HARD.assert(
+		min_head_position_off_of_floor != null, "min_head_position_off_of_floor is not defined"
+	)
+	HARD.assert(push_force_magnitude != null, "push_force_magnitude is not defined")
+	HARD.assert(throw_force_magnitude != null, "throw_force_magnitude is not defined")
+	HARD.assert(minimum_fall_speed != null, "minimum_fall_speed is not defined")
+	HARD.assert(fall_damage_coefficient != null, "fall_damage_coefficient is not defined")
+	HARD.assert(
+		num_frames_alive_after_food_is_gone != null,
+		"num_frames_alive_after_food_is_gone is not defined"
+	)
+	HARD.assert(eat_area_radius != null, "eat_area_radius is not defined")
+	HARD.assert(is_displaying_debug_meshes != null, "is_displaying_debug_meshes is not defined")
+	HARD.assert(is_human_playback_enabled != null, "is_human_playback_enabled is not defined")
+	HARD.assert(is_slowed_from_crouching != null, "is_slowed_from_crouching is not defined")
 
 
-func get_nodes():
+func set_nodes_in_ready():
 	target_player = get_node("target_player")
 	target_head = target_player.get_node("target_head")
 	target_left_hand = target_player.get_node("target_left_hand")
@@ -159,7 +156,6 @@ func get_nodes():
 	climbing_ray = physical_head.get_node("climbing_ray")
 	ground_ray = physical_body.get_node("ground_ray")
 
-	# TODO parameterize the eat area shape?
 	eat_area = physical_head.get_node("eat_area")
 
 	climbing_ray.add_exception(physical_body)
@@ -178,6 +174,8 @@ func get_nodes():
 		starting_right_hand_position_relative_to_head
 		+ target_head.global_transform.origin
 	)
+
+	eyes = _get_eyes()
 
 	# make the eat area comically large so we can test bringing food into our face
 	var shape: SphereShape = eat_area.get_child(0).shape
@@ -203,9 +201,17 @@ func get_nodes():
 		physical_head.get_node("face").visible = true
 		physical_left_hand.get_node("marker").visible = true
 		physical_right_hand.get_node("marker").visible = true
+	else:
+		physical_head.get_node("beak").visible = false
+		physical_head.get_node("face").visible = false
+		physical_left_hand.get_node("marker").visible = false
+		physical_right_hand.get_node("marker").visible = false
 
 
-# TODO need to think of a safer way to reset agent state between videos
+func _get_eyes() -> Node:
+	return get_node("camera")
+
+
 func reset_on_new_world() -> void:
 	# reset any internal state when moving to a new world
 	hit_points = starting_hit_points
@@ -216,7 +222,11 @@ func reset_on_new_world() -> void:
 	_hit_points_gained_from_eating = 0.0
 	_hit_points_lost_from_enemies = 0.0
 	is_dead = false
-	y_vel_history = []
+	floor_y_vel_history = []
+	falling_y_vel_history = []
+	wall_grab_history = []
+	frames_after_taking_fall_damage = 0
+	frames_after_reaching_fall_damage_speeds = 0
 
 	physical_head.linear_velocity = Vector3.ZERO
 	physical_head.angular_velocity = Vector3.ZERO
@@ -235,7 +245,15 @@ func reset_on_new_world() -> void:
 
 
 func set_current_observation() -> void:
-	current_observation = _get_proprioceptive_oberservation()
+	current_observation = _get_proprioceptive_observation()
+
+
+func is_warming_up(_delta: float, _frame: int) -> bool:
+	return false
+
+
+func fix_tracking_once_working() -> bool:
+	return false
 
 
 func set_spawn(spawn_transform: Transform):
@@ -308,34 +326,34 @@ func apply_action(action: AvalonAction, delta: float):
 
 func apply_action_to_physical_body(_action: AvalonAction, delta: float):
 	physical_head.linear_velocity = (
-		(target_head.global_transform.origin - physical_head.global_transform.origin)
+		(target_head.transform.origin - physical_head.transform.origin)
 		/ delta
 	)
 	physical_head.angular_velocity = (
 		Tools.calc_angular_velocity_from_basis(
-			physical_head.global_transform.basis, target_head.global_transform.basis
+			physical_head.transform.basis, target_head.transform.basis
 		)
 		/ delta
 	)
 
 	physical_left_hand.linear_velocity = (
-		(target_left_hand.global_transform.origin - physical_left_hand.global_transform.origin)
+		(target_left_hand.transform.origin - physical_left_hand.transform.origin)
 		/ delta
 	)
 	physical_left_hand.angular_velocity = (
 		Tools.calc_angular_velocity_from_basis(
-			physical_left_hand.global_transform.basis, target_left_hand.global_transform.basis
+			physical_left_hand.transform.basis, target_left_hand.transform.basis
 		)
 		/ delta
 	)
 
 	physical_right_hand.linear_velocity = (
-		(target_right_hand.global_transform.origin - physical_right_hand.global_transform.origin)
+		(target_right_hand.transform.origin - physical_right_hand.transform.origin)
 		/ delta
 	)
 	physical_right_hand.angular_velocity = (
 		Tools.calc_angular_velocity_from_basis(
-			physical_right_hand.global_transform.basis, target_right_hand.global_transform.basis
+			physical_right_hand.transform.basis, target_right_hand.transform.basis
 		)
 		/ delta
 	)
@@ -380,7 +398,24 @@ func move_while_climbing(
 	HARD.assert(false, "`move_while_climbing` not implemented")
 
 
+func _accumulate_falling_y_velocity_history():
+	# NOTE: this must happen before we try and jump or record fall damage
+	var y_vel = abs(get_physical_body_linear_velocity().y)
+	falling_y_vel_history.push_front(y_vel)
+	if len(falling_y_vel_history) > 15:
+		falling_y_vel_history.pop_back()
+
+
+func was_falling() -> bool:
+	var delta_y_speed = _get_delta_y_speed_over_window()
+	return frames_after_taking_fall_damage > 0 or delta_y_speed > minimum_fall_speed * 0.75
+
+
 func jump(action: AvalonAction, _delta: float) -> void:
+	# prevent jumping when recently falling
+	if was_falling():
+		return
+
 	is_jumping = (is_on_floor() or is_able_to_wall_jump()) and action.is_jumping
 	if is_jumping:
 		gravity_velocity += get_jump_velocity() + get_velocity_change_due_to_gravity()
@@ -399,10 +434,21 @@ func jump(action: AvalonAction, _delta: float) -> void:
 
 func get_move_velocity(action: AvalonAction, delta: float) -> Vector3:
 	var head_delta_position = action.head_delta_position
-	return (
+
+	var velocity = (
 		Tools.get_move_delta_position(target_head.global_transform.basis, head_delta_position)
 		/ delta
 	)
+
+	if not is_slowed_from_crouching:
+		return velocity
+
+	var crouch_speed_ratio = clamp(
+		(get_curr_head_distance_from_feet() + min_head_position_off_of_floor) / 2.0,
+		min_head_position_off_of_floor,
+		1.0
+	)
+	return velocity * crouch_speed_ratio
 
 
 func move_while_not_climbing(action: AvalonAction, delta: float) -> void:
@@ -482,6 +528,11 @@ func get_head_distance_from_feet(
 	return curr_head_distance_from_feet + head_vertical_delta_position
 
 
+func get_curr_head_distance_from_feet() -> float:
+	var global_feet_position = physical_body.global_transform.origin.y - height / 2
+	return target_head.global_transform.origin.y - global_feet_position
+
+
 func move_head(action: AvalonAction) -> void:
 	var head_vertical_delta_position = get_head_vertical_delta_position(action)
 	var global_feet_position = physical_body.global_transform.origin.y - height / 2
@@ -513,10 +564,7 @@ func move_head(action: AvalonAction) -> void:
 
 
 func move_body_out_of_terrain(_delta: float) -> void:
-	var normal = ground_ray.get_collision_normal()
-	var _collision = physical_body.move_and_collide(
-		normal.normalized() * standup_speed_after_climbing
-	)
+	var _collision = physical_body.move_and_collide(Vector3.UP * standup_speed_after_climbing)
 
 
 func is_climbing():
@@ -543,6 +591,9 @@ func move(action: AvalonAction, delta: float) -> void:
 			action.right_hand_delta_position,
 			delta
 		)
+
+		_accumulate_falling_y_velocity_history()
+
 		gravity_velocity = Vector3.ZERO
 	else:
 		# use `collision_body` while walking around so you know when you're touching the ground
@@ -550,6 +601,8 @@ func move(action: AvalonAction, delta: float) -> void:
 		collision_head.disabled = true
 
 		move_while_not_climbing(action, delta)
+
+		_accumulate_falling_y_velocity_history()
 
 		# `jump` must happen after move for `is_on_floor` to work
 		jump(action, delta)
@@ -628,31 +681,6 @@ func potential_energy_expenditure(thing_mass: float, delta_distance: float) -> f
 	return clamp(0, thing_mass * GRAVITY_MAGNITUDE * delta_distance, INF)
 
 
-func get_body_mass_with_held_things() -> float:
-	var total := mass
-	for hand in get_hands():
-		var thing = hand.get_held_thing()
-		if is_instance_valid(thing) and not Tools.is_static(thing) and "mass" in thing:
-			total += thing.mass
-	return total
-
-
-func _get_hand_mass_with_held_thing(hand: Node) -> float:
-	var total := mass
-	var thing = hand.get_held_thing()
-	if is_instance_valid(thing) and not Tools.is_static(thing) and "mass" in thing:
-		total += thing.mass
-	return total * arm_mass_ratio
-
-
-func get_left_hand_mass_with_held_thing() -> float:
-	return _get_hand_mass_with_held_thing(target_left_hand)
-
-
-func get_right_hand_mass_with_held_thing() -> float:
-	return _get_hand_mass_with_held_thing(target_right_hand)
-
-
 func _get_body_kinetic_energy_expenditure(
 	thing_mass: float, current_velocity: Vector3, prev_velocity: Vector3
 ) -> float:
@@ -662,19 +690,55 @@ func _get_body_kinetic_energy_expenditure(
 	return kinetic_energy_expenditure(thing_mass, current_velocity, prev_velocity)
 
 
-func _get_fall_damage() -> float:
-	var fall_damage := 0.0
-	var physical_body_linear_velocity = prev_physical_body_linear_velocity
+func _get_delta_y_speed_over_window() -> float:
+	var max_y_speed = falling_y_vel_history.slice(0, _FALL_DAMAGE_WINDOW).max()
+	var min_y_speed = falling_y_vel_history.slice(0, _FALL_DAMAGE_WINDOW).min()
+	return max_y_speed - min_y_speed
 
-	if is_on_floor():
-		fall_damage += (
+
+func _get_fall_damage() -> float:
+	# NOTE: Falling is physics FPS dependent. What happens currently is that it takes several frames after hitting the
+	# 	ground to actually come to rest. Instead of looking at the instanteous difference in speeds, we look at a the
+	#	past _FALL_DAMAGE_WINDOW speeds and compare the smallest and largest speeds in that window to determine
+	#	the correct change of velocity.
+
+	var fall_damage := 0.0
+
+	if len(falling_y_vel_history) <= _FALL_DAMAGE_WINDOW:
+		return fall_damage
+
+	var delta_y_speed = _get_delta_y_speed_over_window()
+	var has_taken_fall_damage_previously = frames_after_taking_fall_damage > 0
+	var is_moving_fast_enough_to_take_damage = delta_y_speed > minimum_fall_speed * 0.75
+
+	# wait _FALL_DAMAGE_WAIT_PERIOD frames after a sufficiently sized change in velocity to see
+	# 	if we come to rest
+	if (
+		not has_taken_fall_damage_previously
+		and is_moving_fast_enough_to_take_damage
+		and frames_after_reaching_fall_damage_speeds < _FALL_DAMAGE_WAIT_PERIOD
+	):
+		frames_after_reaching_fall_damage_speeds += 1
+		return fall_damage
+
+	# after waiting, calculate fall damage of the using the greatest difference of speeds in the past
+	# 	_FALL_DAMAGE_WINDOW frames
+	if not has_taken_fall_damage_previously and is_moving_fast_enough_to_take_damage:
+		fall_damage = (
 			fall_damage_coefficient
-			* clamp(
-				mass * (pow(physical_body_linear_velocity.y, 2) - pow(minimum_fall_speed, 2)),
-				0,
-				INF
-			)
+			* clamp(mass * (pow(delta_y_speed, 2) - pow(minimum_fall_speed, 2)), 0, INF)
 		)
+		frames_after_reaching_fall_damage_speeds = 0
+
+		# if we actually take fall damage, wait _FALL_DAMAGE_DEBOUNCE_PERIOD frames before we
+		#	can take damage again
+		if fall_damage > 0.0:
+			frames_after_taking_fall_damage = _FALL_DAMAGE_DEBOUNCE_PERIOD
+			return fall_damage
+
+	if has_taken_fall_damage_previously:
+		frames_after_taking_fall_damage -= 1
+
 	return fall_damage
 
 
@@ -682,38 +746,31 @@ func _get_all_energy_expenditures() -> Dictionary:
 	# note: this must be called before `update_previous_transforms_and_velocities`!
 	var expenditure = {}
 
-	var total_mass = get_body_mass_with_held_things()
-	var total_left_hand_mass = get_left_hand_mass_with_held_thing()
-	var total_right_hand_mass = get_right_hand_mass_with_held_thing()
+	var total_mass = mass
+	var total_left_hand_mass = mass * arm_mass_ratio
+	var total_right_hand_mass = mass * arm_mass_ratio
 	var physical_body_linear_velocity = get_physical_body_linear_velocity()
 
-	# TODO pushing is not accounted for yet -- a lot more energy is spent holding things!
-	expenditure["physical_body_kinetic_energy_expenditure"] = (
-		body_kinetic_energy_coefficient
-		* _get_body_kinetic_energy_expenditure(
-			total_mass, physical_body_linear_velocity, prev_physical_body_linear_velocity
-		)
-	)
+	# TODO pushing is not accounted for yet
+	expenditure["physical_body_kinetic_energy_expenditure"] = (_get_body_kinetic_energy_expenditure(
+		total_mass, physical_body_linear_velocity, prev_physical_body_linear_velocity
+	))
 
 	if is_jumping:
-		expenditure["physical_body_kinetic_energy_expenditure"] += (
-			body_kinetic_energy_coefficient
-			* kinetic_energy_expenditure(
-				total_mass,
-				Vector3(0.0, get_physical_body_linear_velocity().y, 0.0),
-				Vector3(0.0, prev_physical_body_linear_velocity.y, 0.0)
-			)
-		)
+		expenditure["physical_body_kinetic_energy_expenditure"] += (kinetic_energy_expenditure(
+			total_mass,
+			Vector3(0.0, get_physical_body_linear_velocity().y, 0.0),
+			Vector3(0.0, prev_physical_body_linear_velocity.y, 0.0)
+		))
 
 	var body_delta_position = (
 		physical_body.global_transform.origin
 		- prev_physical_body_global_transform.origin
 	)
 	if is_climbing():
-		expenditure["physical_body_potential_energy_expenditure"] = (
-			body_potential_energy_coefficient
-			* potential_energy_expenditure(total_mass, body_delta_position.y)
-		)
+		expenditure["physical_body_potential_energy_expenditure"] = (potential_energy_expenditure(
+			total_mass, body_delta_position.y
+		))
 	else:
 		expenditure["physical_body_potential_energy_expenditure"] = 0.0
 
@@ -721,53 +778,56 @@ func _get_all_energy_expenditures() -> Dictionary:
 		Tools.get_delta_quaternion(prev_physical_head_global_transform, physical_head.global_transform).get_euler()
 	)
 	var head_potential_delta_distance = head_radius * sin(head_delta_rotation.z)
-	expenditure["physical_head_potential_energy_expenditure"] = (
-		head_potential_energy_coefficient
-		* potential_energy_expenditure(mass * head_mass_ratio, head_potential_delta_distance)
-	)
+	expenditure["physical_head_potential_energy_expenditure"] = (potential_energy_expenditure(
+		mass * head_mass_ratio, head_potential_delta_distance
+	))
 
-	expenditure["physical_left_hand_kinetic_energy_expenditure"] = (
-		left_hand_kinetic_energy_coefficient
-		* kinetic_energy_expenditure(
-			total_left_hand_mass,
-			physical_left_hand.linear_velocity - physical_body_linear_velocity,
-			prev_physical_left_hand_linear_velocity - prev_physical_body_linear_velocity
-		)
-	)
+	expenditure["physical_left_hand_kinetic_energy_expenditure"] = (kinetic_energy_expenditure(
+		total_left_hand_mass,
+		physical_left_hand.linear_velocity - physical_body_linear_velocity,
+		prev_physical_left_hand_linear_velocity - prev_physical_body_linear_velocity
+	))
 	var left_hand_delta_position = (
 		physical_left_hand.global_transform.origin
 		- prev_physical_left_hand_global_transform.origin
 		- body_delta_position
 	)
-	expenditure["physical_left_hand_potential_energy_expenditure"] = (
-		left_hand_potential_energy_coefficient
-		* potential_energy_expenditure(total_left_hand_mass, left_hand_delta_position.y)
-	)
+	expenditure["physical_left_hand_potential_energy_expenditure"] = (potential_energy_expenditure(
+		total_left_hand_mass, left_hand_delta_position.y
+	))
 
-	expenditure["physical_right_hand_kinetic_energy_expenditure"] = (
-		right_hand_kinetic_energy_coefficient
-		* kinetic_energy_expenditure(
-			total_right_hand_mass,
-			physical_right_hand.linear_velocity - physical_body_linear_velocity,
-			prev_physical_right_hand_linear_velocity - prev_physical_body_linear_velocity
-		)
-	)
+	expenditure["physical_right_hand_kinetic_energy_expenditure"] = (kinetic_energy_expenditure(
+		total_right_hand_mass,
+		physical_right_hand.linear_velocity - physical_body_linear_velocity,
+		prev_physical_right_hand_linear_velocity - prev_physical_body_linear_velocity
+	))
 	var right_hand_delta_position = (
 		physical_right_hand.global_transform.origin
 		- prev_physical_right_hand_global_transform.origin
 		- body_delta_position
 	)
-	expenditure["physical_right_hand_potential_energy_expenditure"] = (
-		right_hand_potential_energy_coefficient
-		* potential_energy_expenditure(total_right_hand_mass, right_hand_delta_position.y)
-	)
+	expenditure["physical_right_hand_potential_energy_expenditure"] = (potential_energy_expenditure(
+		total_right_hand_mass, right_hand_delta_position.y
+	))
 
 	return expenditure
 
 
-func _get_proprioceptive_oberservation() -> Dictionary:
+func _get_proprioceptive_observation() -> Dictionary:
 	# note: this must be called before `update_previous_transforms_and_velocities`!
 	var data = {}
+
+	data["target_head_position"] = target_head.global_transform.origin
+	data["target_left_hand_position"] = target_left_hand.global_transform.origin
+	data["target_right_hand_position"] = target_right_hand.global_transform.origin
+
+	data["target_head_rotation"] = Tools.vec_rad2deg(target_head.global_transform.basis.get_euler())
+	data["target_left_hand_rotation"] = Tools.vec_rad2deg(
+		target_left_hand.global_transform.basis.get_euler()
+	)
+	data["target_right_hand_rotation"] = Tools.vec_rad2deg(
+		target_right_hand.global_transform.basis.get_euler()
+	)
 
 	data["physical_body_position"] = physical_body.global_transform.origin
 	data["physical_head_position"] = physical_head.global_transform.origin
@@ -883,13 +943,9 @@ func _get_proprioceptive_oberservation() -> Dictionary:
 	data["right_hand_thing_colliding_with_hand"] = target_right_hand.get_id_of_thing_colliding_with_hand()
 	data["right_hand_held_thing"] = target_right_hand.get_id_of_held_thing()
 
-	var total_energy_expenditure := 0.0
 	var expenditure = _get_all_energy_expenditures()
 	for key in expenditure:
 		data[key] = expenditure[key]
-		total_energy_expenditure += expenditure[key]
-	total_energy_expenditure *= total_energy_coefficient
-	data["total_energy_expenditure"] = total_energy_expenditure
 	data["fall_damage"] = _get_fall_damage()
 
 	return data
@@ -919,19 +975,14 @@ func update_previous_transforms_and_velocities(is_reset_for_spawn = false) -> vo
 	prev_physical_right_hand_angular_velocity = physical_right_hand.angular_velocity
 
 
-# TODO make this safer
 # NOTE: this must be called after a physics tick (so at the start of another tick)
-func get_oberservation_and_reward() -> Dictionary:
+func get_observation_and_reward() -> Dictionary:
 	# we won't know what damage we've taken until after a physics tick
 	current_observation["hit_points_lost_from_enemies"] = _hit_points_lost_from_enemies
 	current_observation["hit_points_gained_from_eating"] = _hit_points_gained_from_eating
 	var reward = (
 		_hit_points_gained_from_eating
-		- (
-			_hit_points_lost_from_enemies
-			+ current_observation["total_energy_expenditure"]
-			+ current_observation["fall_damage"]
-		)
+		- (_hit_points_lost_from_enemies + current_observation["fall_damage"])
 	)
 	_hit_points_lost_from_enemies = 0.0
 	_hit_points_gained_from_eating = 0.0
@@ -939,14 +990,12 @@ func get_oberservation_and_reward() -> Dictionary:
 	# prevent huge negative rewards
 	reward = max(reward, -hit_points)
 
-	# TODO don't love that this happens here
 	# update hit points now
 	hit_points += reward
 	current_observation["reward"] = reward
 	current_observation["hit_points"] = hit_points
 
 	if hit_points <= 0:
-		# TODO handle death, need to end the current rollout
 		is_dead = true
 
 	current_observation["is_dead"] = int(is_dead)
@@ -1015,18 +1064,33 @@ func is_able_to_wall_jump() -> bool:
 	var y_vel = abs(get_physical_body_linear_velocity().y)
 
 	var no_recent_jumps := true
-	for value in y_vel_history:
+	for value in floor_y_vel_history:
 		if value > 1.0:
 			no_recent_jumps = false
 			break
-	y_vel_history.append(y_vel)
-	if len(y_vel_history) > 15:
-		y_vel_history.pop_front()
+	floor_y_vel_history.append(y_vel)
+	if len(floor_y_vel_history) > 15:
+		floor_y_vel_history.pop_front()
 	else:
 		# still waiting to build up enough history
 		no_recent_jumps = false
 
-	var result = physical_body.is_on_wall() and y_vel < 1.0 and no_recent_jumps
+	var recently_grabbed_wall = false
+	for value in wall_grab_history:
+		if value:
+			recently_grabbed_wall = true
+			break
+	var is_grabbing_wall = is_climbing()
+	wall_grab_history.append(is_grabbing_wall)
+	if len(wall_grab_history) > 15:
+		wall_grab_history.pop_front()
+
+	var result = (
+		physical_body.is_on_wall()
+		and y_vel < 1.0
+		and no_recent_jumps
+		and not recently_grabbed_wall
+	)
 	return result
 
 

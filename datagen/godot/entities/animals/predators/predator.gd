@@ -35,7 +35,7 @@ func _physics_process(_delta):
 	if (
 		previous_behavior != active_behavior
 		or not is_attack_rested()
-		or not weapon.is_able_to_attack()
+		or not weapon.is_able_to_attack
 	):
 		return
 	weapon.attack(attack_damage)

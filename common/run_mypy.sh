@@ -13,3 +13,4 @@ mypy_targets="$1"
 
 #actually run mypy
 (MYPYPATH=. mypy --show-absolute-path --config-file ./common/mypy.ini $mypy_targets | grep -v 'Function is missing a return type annotation' | grep -v 'Use \"-> None\" if function does not return a value' | grep -E "(error:|note:)" | cat ) || echo "Done."
+#(MYPYPATH=. dmypy run -- --show-absolute-path --config-file ./common/mypy.ini $mypy_targets | grep -v 'Function is missing a return type annotation' | grep -v 'Use \"-> None\" if function does not return a value' | grep -E "(error:|note:)" | cat ) || echo "Done."

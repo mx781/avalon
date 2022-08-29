@@ -82,7 +82,7 @@ def temp_file_path_() -> Generator[Path, None, None]:
         yield output
 
 
-def create_temp_file_path() -> ContextManager[Path]:
+def create_temp_file_path(cleanup=True) -> ContextManager[Path]:
     @contextmanager
     def context() -> Generator[Path, None, None]:
         random_id = uuid4()
@@ -90,8 +90,11 @@ def create_temp_file_path() -> ContextManager[Path]:
         try:
             yield Path(output_path)
         finally:
-            if os.path.exists(output_path):
-                os.remove(output_path)
+            if cleanup and os.path.exists(output_path):
+                if os.path.isfile(output_path):
+                    os.remove(output_path)
+                else:
+                    shutil.rmtree(output_path)
 
     # noinspection PyTypeChecker
     return context()

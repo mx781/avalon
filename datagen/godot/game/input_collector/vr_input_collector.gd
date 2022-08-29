@@ -34,5 +34,9 @@ func scaled_relative_action_from_normalized_relative_action(normalized_action, p
 		normalized_action.right_hand_delta_rotation
 		* deg2rad(player.max_hand_angular_speed)
 	)
+	scaled_action.relative_origin_delta_rotation = (
+		normalized_action.relative_origin_delta_rotation
+		* Tools.vec_deg2rad(player.max_head_angular_speed)
+	)
 
 	return scaled_action

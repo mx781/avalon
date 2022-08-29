@@ -5,16 +5,14 @@ export var movement_detection_threshold := 0.1
 export var give_up_after_stillness_steps := 16
 
 export var inactive_speed := Vector2(3, 2)
-export var inactive_steps_per_side := 4
-export var inactive_steps_per_turn := 4
+export var inactive_hops_per_side := 4
+export var inactive_frames_per_turn := 4
 export var inactive_turn_angle := 45
 
 export var active_chase_speed := Vector2(4.5, 2)
-# TODO rename "active_rest_steps" to "active_rest_frames." and chase steps to hops for hoppers
-# It takes a rabbit ~ 3 frames to hop
 export var active_turn_speed := 2.5
-export var active_chase_steps := 6
-export var active_rest_steps := 3
+export var active_chase_hops := 6
+export var active_rest_frames := 3
 
 export var climbing_speed := 12
 export var climbing_escape_hop_speed := Vector2(6, 8)
@@ -26,7 +24,7 @@ var activation_criteria: ActivationGate
 
 func _ready():
 	var continued_activation_criteria = [
-		PlayerWithinDetectionZone.new(),
+		PlayerInDetectionRadius.new(),
 		NoticesPlayerMoving.new(movement_detection_threshold, give_up_after_stillness_steps),
 	]
 	var initial_activation_criteria = [CanSeePlayer.new()]
@@ -38,7 +36,7 @@ func _ready():
 		climbing_speed,
 		climbing_escape_hop_speed,
 		HopInCircle.new(
-			inactive_speed, inactive_steps_per_side, inactive_steps_per_turn, inactive_turn_angle
+			inactive_speed, inactive_hops_per_side, inactive_frames_per_turn, inactive_turn_angle
 		)
 	)
 
@@ -53,15 +51,15 @@ func _ready():
 			HopInDirection.new(
 				TOWARDS_PLAYER,
 				active_chase_speed,
-				active_chase_steps,
-				active_rest_steps,
+				active_chase_hops,
+				active_rest_frames,
 				active_turn_speed
 			),
 			stay_grounded_when_making_headway
 		)
 	)
 	avoid_ocean_behavior = AvoidOcean.new(
-		_rng_key("avoid_ocean"), active_chase_steps, inactive_speed
+		_rng_key("avoid_ocean"), active_chase_hops, inactive_speed
 	)
 
 

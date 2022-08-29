@@ -1,3 +1,5 @@
+import gzip
+import json
 import random
 import shutil
 import uuid
@@ -7,16 +9,16 @@ from unittest.mock import patch
 
 import pytest
 
-from datagen.avalon_server.app import APK_VERSIONS_PATH
-from datagen.avalon_server.app import IGNORED_MARKER
-from datagen.avalon_server.app import RESET_MARKER
-from datagen.avalon_server.app import RunID
-from datagen.avalon_server.app import ServerState
-from datagen.avalon_server.app import UserID
-from datagen.avalon_server.app import WorldID
-from datagen.avalon_server.app import get_current_server_state
-
 # run with `pytest  --noconftest -k test_server_state`
+from .server_state import APK_VERSIONS_PATH
+from .server_state import IGNORED_MARKER
+from .server_state import METADATA_FILE
+from .server_state import RESET_MARKER
+from .server_state import RunID
+from .server_state import ServerState
+from .server_state import UserID
+from .server_state import WorldID
+from .server_state import get_current_server_state
 
 TEST_ROOT_PATH = "/tmp/avalon_server_test"
 TEST_USERS = [f"user_{i}" for i in range(5)]
@@ -33,6 +35,7 @@ NEXT_RUN_ID = str(uuid.uuid4())
 
 TEST_WORLDS = [WORLD_ID, IGNORED_WORLD, NEXT_WORLD, PRACTICE_WORLD]
 
+API_VERSION = "test_api_version"
 APK_VERSION = "test_apk_version"
 INVALID_APK_VERSION = "invalid_apk_version"
 
@@ -51,7 +54,7 @@ def server_state():
         if not path.exists():
             path.mkdir()
 
-    server_state = get_current_server_state(root_path)
+    server_state = get_current_server_state(root_path, API_VERSION)
 
     yield server_state
 
@@ -111,6 +114,36 @@ def invalid_apk_version():
     return INVALID_APK_VERSION
 
 
+def _fill_server_state(
+    server_state: ServerState,
+    apk_version: str,
+    world_id: WorldID,
+    ignored_world_id: WorldID,
+    users: List[UserID],
+    run_id: RunID,
+    is_success: bool,
+):
+    for user_id in users:
+        server_state.record_user_start_on_world(world_id=world_id, user_id=user_id, run_id=run_id)
+
+        # mock metadata json file
+        user_path = server_state.get_user_path_from_user_id_for_world(
+            world_id=world_id, user_id=user_id, run_id=run_id
+        )
+        parent_path = user_path / apk_version
+        if not parent_path.exists():
+            parent_path.mkdir(parents=True)
+        metadata_path = parent_path / METADATA_FILE
+        with gzip.open(metadata_path, "wb") as f:
+            f.write(json.dumps({"is_success": is_success}).encode("utf-8"))
+
+    server_state.ignore_world(world_id=ignored_world_id)
+
+    server_state.add_apk_version(apk_version=apk_version)
+
+    return server_state
+
+
 @pytest.fixture()
 def filled_server_state(
     server_state: ServerState,
@@ -120,14 +153,35 @@ def filled_server_state(
     users: List[UserID],
     run_id: RunID,
 ):
-    for user_id in users:
-        server_state.record_user_start_on_world(world_id=world_id, user_id=user_id, run_id=run_id)
+    yield _fill_server_state(
+        server_state,
+        apk_version,
+        world_id,
+        ignored_world_id,
+        users,
+        run_id,
+        is_success=True,
+    )
 
-    server_state.ignore_world(world_id=ignored_world_id)
 
-    server_state.add_apk_version(apk_version=apk_version)
-
-    yield server_state
+@pytest.fixture()
+def filled_server_state_with_no_success(
+    server_state: ServerState,
+    apk_version: str,
+    world_id: WorldID,
+    ignored_world_id: WorldID,
+    users: List[UserID],
+    run_id: RunID,
+):
+    yield _fill_server_state(
+        server_state,
+        apk_version,
+        world_id,
+        ignored_world_id,
+        users,
+        run_id,
+        is_success=False,
+    )
 
 
 def test_valid_apk_version(server_state: ServerState, apk_version: str):
@@ -193,6 +247,15 @@ def test_available_worlds(
     assert num_valid_plays == len(users)
     assert world_id not in filled_server_state.get_available_worlds()
     assert ignored_world_id not in filled_server_state.get_available_worlds()
+
+
+def test_available_worlds_with_no_success(
+    filled_server_state_with_no_success: ServerState, world_id: WorldID, ignored_world_id: WorldID, users: List[UserID]
+):
+    num_valid_plays = filled_server_state_with_no_success.get_num_valid_plays_for_world(world_id=world_id)
+    assert num_valid_plays == len(users)
+    assert world_id in filled_server_state_with_no_success.get_available_worlds()
+    assert ignored_world_id not in filled_server_state_with_no_success.get_available_worlds()
 
 
 def test_practice_worlds(

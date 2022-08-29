@@ -20,7 +20,7 @@ func read_input_from_event(_event: InputEvent) -> void:
 
 
 func read_input_before_physics() -> void:
-	HARD.assert(false, "Not implemented")
+	pass
 
 
 func read_input_from_pipe(_action_pipe: StreamPeerBuffer) -> void:

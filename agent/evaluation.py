@@ -4,12 +4,10 @@ from typing import List
 from typing import Optional
 from typing import Tuple
 
-import wandb
-
-from agent.godot_gym import create_base_benchmark_config
+from agent.godot.godot_gym import create_base_benchmark_config
 from datagen.godot_env import AvalonObservationType
-from datagen.godot_env import AvalonScoreEvaluator
 from datagen.godot_env import GodotEnv
+from datagen.godot_env import GodotGoalEvaluator
 from datagen.godot_env import VRActionType
 from datagen.world_creation.constants import AvalonTask
 from datagen.world_creation.world_generator import GenerateWorldParams
@@ -40,13 +38,7 @@ class AvalonFolderWorldGenerator(WorldGenerator):
             if index in self.levels:
                 raise Exception("Cannot have two levels with the same index!")
             difficulty = float(dir_parts[2].replace("_", "."))
-
-            if task in (AvalonTask.SURVIVE, AvalonTask.FIND, AvalonTask.GATHER, AvalonTask.NAVIGATE):
-                starting_hit_points = 3
-            elif task in (AvalonTask.STACK, AvalonTask.CARRY, AvalonTask.EXPLORE):
-                starting_hit_points = 2
-            else:
-                starting_hit_points = 1
+            starting_hit_points = 1
 
             self.levels[index] = GeneratedWorldParams(
                 task=task,
@@ -69,9 +61,7 @@ class EvaluationGodotEnv(GodotEnv):
         #     if link_path.exists():
         #         os.unlink(link_path)
         #     os.symlink(eval_world_dir, Path(GODOT_PATH) / "worlds")
-        base_config = create_base_benchmark_config()
-        with base_config.mutable_clone() as config:
-            config.player.total_energy_coefficient = 0
+        config = create_base_benchmark_config()
 
         self.eval_world_dir = eval_world_dir
         self.eval_world_ids = tuple(world_id_from_world_folder_name(x) for x in get_world_folders(eval_world_dir))
@@ -82,7 +72,7 @@ class EvaluationGodotEnv(GodotEnv):
             config=config,
             observation_type=AvalonObservationType,
             action_type=VRActionType,
-            goal_evaluator=AvalonScoreEvaluator(),
+            goal_evaluator=GodotGoalEvaluator(),
         )
 
     def reset(self):
@@ -109,26 +99,6 @@ def get_score(observations: List[AvalonObservationType]):
     if observations[-1].is_dead or score_hp is None:
         score_hp = observations[-1].hit_points.item()
     return score_hp
-
-
-def load_checkpoint_from_wandb_run(run_path: str, filename: str) -> str:
-    api = wandb.Api()
-    run = api.run(run_path)
-    run_root = Path(EVAL_TEMP_PATH) / run_path
-    os.makedirs(run_root, exist_ok=True)
-    bones_checkpoint_path = wandb.restore(filename, run_path=run_path, replace=True, root=str(run_root))
-    assert bones_checkpoint_path is not None, "Could not load checkpoint"
-    return bones_checkpoint_path.name
-
-
-def get_latest_checkpoint_filename(run_path: str, prefix="", suffix="") -> str:
-    api = wandb.Api()
-    run = api.run(run_path)
-    checkpoint_filenames = [
-        file.name for file in run.files() if file.name.startswith(prefix) and file.name.endswith(suffix)
-    ]
-    checkpoint_filenames = sorted(checkpoint_filenames, key=lambda x: int(x[len(prefix) : -len(suffix)]))
-    return checkpoint_filenames[-1]
 
 
 def get_wandb_result_key(wandb_run: str, checkpoint_filename: str, data_key: str):

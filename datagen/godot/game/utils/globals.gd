@@ -1,13 +1,13 @@
 extends Node
 
-# TODO remove
-var root: Node
-var time_in_seconds := 0.0
+var _player = null
 
-# TODO is there a better way to get the player everywhere?
-var player
 
-var user_id: String
-var is_player_using_vr_controls := false
-var is_player_using_mouse_keyboard_controls := false
-var is_player_human := false
+func get_player() -> Object:
+	if _player == null:
+		_player = get_tree().root.find_node("player", true, false)
+	return _player
+
+
+func is_player_using_mouse_keyboard_controls() -> bool:
+	return get_player() is MouseKeyboardPlayer
