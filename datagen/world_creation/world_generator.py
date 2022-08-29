@@ -187,7 +187,8 @@ class BlockingWorldGenerator(WorldGenerator):
         )
 
     def generate_batch(self, start_world_id: int, batch_size: int = 1) -> List[GeneratedWorldParams]:
-        return [self._generate_world(i) for i in range(start_world_id, start_world_id + batch_size)]
+        assert start_world_id is None
+        return [self._generate_world(i) for i in range(0, batch_size)]
 
     def set_task(self, task: Hashable) -> None:
         assert isinstance(task, WorldGeneratorTask)

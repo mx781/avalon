@@ -15,8 +15,8 @@ from matplotlib import pyplot as plt
 from networkx import Graph
 from scipy.spatial.transform import Rotation
 
-from contrib.serialization import Serializable
 from common.errors import SwitchError
+from contrib.serialization import Serializable
 from datagen.godot_base_types import IntRange
 from datagen.world_creation.geometry import BuildingTile
 from datagen.world_creation.indoor.blocks import FloorBlock

@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Dict
 from typing import Iterable
 from typing import List
 from typing import Optional
@@ -137,15 +138,26 @@ def observation_video_tensor(data: List[AvalonObservationType]) -> torch.Tensor:
     return rgbd_to_video_tensor(x.rgbd for x in data)
 
 
+def lame_observation_video_tensor(data: List[Union[Dict, Tuple]]) -> torch.Tensor:
+    # This nasty combination of types occurs when collecting observations into one list by
+    # using the native gym.reset() and gym.step()
+    return rgbd_to_video_tensor((x["rgbd"] if isinstance(x, dict) else x[0]["rgbd"]) for x in data)
+
+
 def observation_video(data: Union[List[AvalonObservationType], np.ndarray]) -> torch.Tensor:
     stack = [x.rgb for x in data] if isinstance(data, list) else data
     return torch.stack([rearrange(torch.tensor(x), "h w c -> c h w") / 255.0 for x in stack])
 
 
-def display_video(data: List[AvalonObservationType], size: Optional[Tuple[int, int]] = None) -> None:
+def display_video(data: List[Union[AvalonObservationType, dict]], size: Optional[Tuple[int, int]] = None) -> None:
     if size is None:
         size = (512, 512)
-    tensor = observation_video_tensor(data)
+    if isinstance(data[0], AvalonObservationType):
+        tensor = observation_video_tensor(data)
+    elif isinstance(data[0], dict):
+        tensor = lame_observation_video_tensor(data)
+    else:
+        raise SwitchError(f"Expected AvalonObservationType or dict, but got {type(data[0])}")
     visualize_tensor_as_video(tensor, normalize=False, size=size)
 
 
